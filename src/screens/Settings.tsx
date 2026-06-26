@@ -1,30 +1,56 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { parseAndStoreCSV } from '../lib/csv'
+import { parseAndStoreGPX } from '../lib/gpx'
 import { useStages } from '../hooks/useStages'
+import { useGPX } from '../hooks/useGPX'
 
 export default function Settings() {
-  const { stages, reload } = useStages()
+  const { stages, reload: reloadStages } = useStages()
+  const { gpx, reload: reloadGPX } = useGPX()
+
   const csvInputRef = useRef<HTMLInputElement>(null)
-  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
-  const [uploading, setUploading] = useState(false)
+  const gpxInputRef = useRef<HTMLInputElement>(null)
+
+  const [csvStatus, setCsvStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [gpxStatus, setGpxStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [csvUploading, setCsvUploading] = useState(false)
+  const [gpxUploading, setGpxUploading] = useState(false)
 
   const handleCSVChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-
-    setUploading(true)
-    setStatus(null)
-
+    setCsvUploading(true)
+    setCsvStatus(null)
     try {
       const { count } = await parseAndStoreCSV(file)
-      await reload()
-      setStatus({ type: 'success', message: `${count} stages loaded successfully.` })
+      await reloadStages()
+      setCsvStatus({ type: 'success', message: `${count} stages loaded.` })
     } catch (err) {
-      setStatus({ type: 'error', message: (err as Error).message })
+      setCsvStatus({ type: 'error', message: (err as Error).message })
     } finally {
-      setUploading(false)
+      setCsvUploading(false)
       if (csvInputRef.current) csvInputRef.current.value = ''
+    }
+  }
+
+  const handleGPXChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setGpxUploading(true)
+    setGpxStatus(null)
+    try {
+      const { waypoints, trackPoints } = await parseAndStoreGPX(file)
+      await reloadGPX()
+      setGpxStatus({
+        type: 'success',
+        message: `Route loaded: ${trackPoints.toLocaleString()} track points, ${waypoints} waypoints.`,
+      })
+    } catch (err) {
+      setGpxStatus({ type: 'error', message: (err as Error).message })
+    } finally {
+      setGpxUploading(false)
+      if (gpxInputRef.current) gpxInputRef.current.value = ''
     }
   }
 
@@ -40,60 +66,85 @@ export default function Settings() {
       </header>
 
       <div className="px-4 py-6 space-y-4">
+
         {/* CSV upload */}
-        <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
-          <h2 className="text-sm font-semibold text-neutral-800">Stage Data (CSV)</h2>
-          {stages.length > 0 ? (
-            <p className="text-xs text-neutral-500 mt-1">{stages.length} stages loaded</p>
-          ) : (
-            <p className="text-xs text-neutral-500 mt-1">No data loaded yet</p>
-          )}
+        <UploadCard
+          title="Stage Data (CSV)"
+          statusLine={stages.length > 0 ? `${stages.length} stages loaded` : 'No data loaded yet'}
+          hint={
+            <>
+              Required: stage, date, length_km, elevation_gain_m, duration_h, start, finish,
+              accommodation_name, accommodation_url, companion, waypoint_start, waypoint_finish.{' '}
+              <span className="text-neutral-500">Optional: lat, lon (enables weather).</span>
+            </>
+          }
+          buttonLabel={csvUploading ? 'Uploading…' : stages.length > 0 ? 'Replace CSV' : 'Upload CSV'}
+          disabled={csvUploading}
+          onButtonClick={() => csvInputRef.current?.click()}
+          status={csvStatus}
+        />
+        <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCSVChange} />
 
-          <p className="text-xs text-neutral-400 mt-2 leading-relaxed">
-            Required columns: stage, date, length_km, elevation_gain_m, duration_h, start, finish,
-            accommodation_name, accommodation_url, companion, waypoint_start, waypoint_finish.
-            Optional: lat, lon (enables weather).
-          </p>
-
-          <input
-            ref={csvInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={handleCSVChange}
-          />
-          <button
-            onClick={() => csvInputRef.current?.click()}
-            disabled={uploading}
-            className="mt-3 w-full py-2.5 rounded-xl border border-green-700 text-green-700 text-sm font-medium disabled:opacity-50 active:bg-green-50 transition-colors"
-          >
-            {uploading ? 'Uploading…' : stages.length > 0 ? 'Replace CSV' : 'Upload CSV'}
-          </button>
-        </div>
-
-        {/* GPX upload — v2 */}
-        <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4 opacity-50">
-          <h2 className="text-sm font-semibold text-neutral-800">Route File (GPX)</h2>
-          <p className="text-xs text-neutral-500 mt-1">Coming in v2 — enables map view and elevation profiles.</p>
-          <button
-            disabled
-            className="mt-3 w-full py-2.5 rounded-xl border border-neutral-300 text-neutral-400 text-sm font-medium"
-          >
-            Upload GPX
-          </button>
-        </div>
-
-        {/* Status message */}
-        {status && (
-          <div className={`rounded-xl px-4 py-3 text-sm ${
-            status.type === 'success'
-              ? 'bg-green-50 text-green-800 border border-green-200'
-              : 'bg-red-50 text-red-800 border border-red-200'
-          }`}>
-            {status.message}
-          </div>
-        )}
+        {/* GPX upload */}
+        <UploadCard
+          title="Route File (GPX)"
+          statusLine={
+            gpx
+              ? `Route loaded: ${gpx.trackPoints.length.toLocaleString()} pts, ${gpx.waypoints.length} waypoints`
+              : 'No route file loaded'
+          }
+          hint="Upload a single GPX file for the full route. Waypoint names should match the waypoint_start / waypoint_finish values in your CSV — they're used to slice the map view per stage."
+          buttonLabel={gpxUploading ? 'Uploading…' : gpx ? 'Replace GPX' : 'Upload GPX'}
+          disabled={gpxUploading}
+          onButtonClick={() => gpxInputRef.current?.click()}
+          status={gpxStatus}
+        />
+        <input ref={gpxInputRef} type="file" accept=".gpx" className="hidden" onChange={handleGPXChange} />
       </div>
+    </div>
+  )
+}
+
+function UploadCard({
+  title,
+  statusLine,
+  hint,
+  buttonLabel,
+  disabled,
+  onButtonClick,
+  status,
+}: {
+  title: string
+  statusLine: string
+  hint: React.ReactNode
+  buttonLabel: string
+  disabled: boolean
+  onButtonClick: () => void
+  status: { type: 'success' | 'error'; message: string } | null
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4 space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-neutral-800">{title}</h2>
+        <p className="text-xs text-neutral-500 mt-0.5">{statusLine}</p>
+      </div>
+      <p className="text-xs text-neutral-400 leading-relaxed">{hint}</p>
+      <button
+        onClick={onButtonClick}
+        disabled={disabled}
+        className="w-full py-2.5 rounded-xl border border-green-700 text-green-700 text-sm font-medium disabled:opacity-50 active:bg-green-50 transition-colors"
+      >
+        {buttonLabel}
+      </button>
+      {status && (
+        <div className={`rounded-xl px-3 py-2.5 text-xs ${
+          status.type === 'success'
+            ? 'bg-green-50 text-green-800 border border-green-200'
+            : 'bg-red-50 text-red-800 border border-red-200'
+        }`}>
+          {status.message}
+        </div>
+      )}
     </div>
   )
 }

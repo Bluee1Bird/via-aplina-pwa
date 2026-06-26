@@ -4,7 +4,7 @@ import { useProgress } from '../hooks/useProgress'
 
 export default function Home() {
   const { stages, loading } = useStages()
-  const { completedStages, currentStage, completedCount, allDone, markDone } = useProgress(stages)
+  const { completedStages, currentStage, completedCount, allDone, toggleStage, markNextDone } = useProgress(stages)
   const navigate = useNavigate()
 
   if (loading) {
@@ -78,19 +78,14 @@ export default function Home() {
             const isCurrent = currentStage?.stage === stage.stage
 
             return (
-              <li key={stage.stage}>
+              <li key={stage.stage} className="flex items-center bg-white">
+                {/* Tappable done toggle */}
                 <button
-                  onClick={() => navigate(`/stage/${stage.stage}`)}
-                  className={`w-full text-left px-4 py-3.5 flex items-center gap-3 transition-colors ${
-                    isCurrent
-                      ? 'bg-green-50'
-                      : done
-                        ? 'bg-white'
-                        : 'bg-white'
-                  }`}
+                  onClick={() => toggleStage(stage.stage)}
+                  aria-label={done ? `Unmark stage ${stage.stage} as done` : `Mark stage ${stage.stage} as done`}
+                  className="pl-4 pr-2 py-4 shrink-0 touch-manipulation"
                 >
-                  {/* Status indicator */}
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-medium ${
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors ${
                     done
                       ? 'bg-green-600 text-white'
                       : isCurrent
@@ -99,7 +94,13 @@ export default function Home() {
                   }`}>
                     {done ? '✓' : stage.stage}
                   </div>
+                </button>
 
+                {/* Stage row — taps to DayCard */}
+                <button
+                  onClick={() => navigate(`/stage/${stage.stage}`)}
+                  className={`flex-1 min-w-0 text-left py-3.5 pr-4 flex items-center gap-2 ${isCurrent ? 'bg-green-50' : ''}`}
+                >
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm font-medium truncate ${done ? 'text-neutral-400' : 'text-neutral-800'}`}>
                       {stage.start} → {stage.finish}
@@ -110,12 +111,12 @@ export default function Home() {
                   </div>
 
                   {isCurrent && (
-                    <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full flex-shrink-0">
-                      Today
+                    <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full shrink-0">
+                      Next
                     </span>
                   )}
 
-                  <svg className="w-4 h-4 text-neutral-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-neutral-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
@@ -129,7 +130,7 @@ export default function Home() {
       {!allDone && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-neutral-200 px-4 py-4 safe-area-bottom">
           <button
-            onClick={markDone}
+            onClick={markNextDone}
             className="w-full py-3.5 bg-green-700 text-white rounded-xl font-medium text-sm active:bg-green-800 transition-colors"
           >
             Mark today as done

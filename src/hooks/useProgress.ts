@@ -11,16 +11,25 @@ export function useProgress(stages: Stage[]) {
       .then(p => setCompletedStages(p?.completedStages ?? []))
   }, [stages.length])
 
-  const markDone = useCallback(async () => {
-    const completed = new Set(completedStages)
-    const next = stages.find(s => !completed.has(s.stage))
-    if (!next) return
-
-    const updated = [...completedStages, next.stage]
+  const persist = useCallback(async (updated: number[]) => {
     const db = await getDB()
     await db.put('progress', { completedStages: updated }, 1)
     setCompletedStages(updated)
-  }, [completedStages, stages])
+  }, [])
+
+  const toggleStage = useCallback(async (stageId: number) => {
+    const updated = completedStages.includes(stageId)
+      ? completedStages.filter(id => id !== stageId)
+      : [...completedStages, stageId]
+    await persist(updated)
+  }, [completedStages, persist])
+
+  const markNextDone = useCallback(async () => {
+    const completed = new Set(completedStages)
+    const next = stages.find(s => !completed.has(s.stage))
+    if (!next) return
+    await persist([...completedStages, next.stage])
+  }, [completedStages, stages, persist])
 
   const completedSet = new Set(completedStages)
   const currentStage = stages.find(s => !completedSet.has(s.stage))
@@ -31,6 +40,7 @@ export function useProgress(stages: Stage[]) {
     currentStage,
     completedCount: completedStages.length,
     allDone,
-    markDone,
+    toggleStage,
+    markNextDone,
   }
 }

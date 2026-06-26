@@ -1,9 +1,15 @@
+import { lazy, Suspense } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useStages } from '../hooks/useStages'
+import { useProgress } from '../hooks/useProgress'
 import { useCompanion } from '../hooks/useCompanion'
 import { useSwipe } from '../hooks/useSwipe'
 import { useWeather } from '../hooks/useWeather'
+import { useGPX } from '../hooks/useGPX'
 import { weatherIcon, weatherLabel } from '../lib/weather'
+
+// Lazy-load the map so Leaflet CSS doesn't block initial render
+const StageMap = lazy(() => import('../components/StageMap'))
 
 export default function DayCard() {
   const { stageId } = useParams<{ stageId: string }>()
@@ -21,9 +27,10 @@ export default function DayCard() {
   const goPrev = () => prev && navigate(`/stage/${prev.stage}`)
   const { onTouchStart, onTouchEnd } = useSwipe(goNext, goPrev)
 
-  // Hooks must be called unconditionally — useCompanion handles undefined stage
+  const { completedStages, toggleStage } = useProgress(stages)
   const companion = useCompanion(stage, stages)
   const weather = useWeather(stageNum, stage?.lat, stage?.lon)
+  const { gpx } = useGPX()
 
   if (loading) {
     return (
@@ -44,8 +51,11 @@ export default function DayCard() {
     )
   }
 
+  const isDone = completedStages.has(stage.stage)
   const minAgo = weather.fetchedAt ? Math.round((Date.now() - weather.fetchedAt) / 60000) : null
   const stagePosition = `Stage ${idx + 1} of ${sorted.length}`
+
+  const hasMap = gpx !== null && (stage.waypoint_start || stage.waypoint_finish)
 
   return (
     <div
@@ -71,12 +81,24 @@ export default function DayCard() {
               {stage.start} → {stage.finish}
             </h1>
           </div>
+          {/* Done toggle */}
+          <button
+            onClick={() => toggleStage(stage.stage)}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+              isDone
+                ? 'bg-green-100 border-green-300 text-green-800'
+                : 'bg-white border-neutral-300 text-neutral-500'
+            }`}
+          >
+            <span>{isDone ? '✓' : '○'}</span>
+            <span>{isDone ? 'Done' : 'Mark done'}</span>
+          </button>
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 pb-28">
 
-        {/* Stats strip */}
+        {/* Route stats */}
         <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Route</span>
@@ -88,7 +110,7 @@ export default function DayCard() {
             <Metric icon="⏱️" label="Duration" value={`${stage.duration_h} h`} />
           </div>
 
-          {/* Waypoints */}
+          {/* Waypoints breadcrumb */}
           {(stage.waypoint_start || stage.waypoint_finish) && (
             <div className="mt-4 flex items-center gap-2 text-xs text-neutral-500">
               <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
@@ -99,6 +121,28 @@ export default function DayCard() {
             </div>
           )}
         </div>
+
+        {/* Map */}
+        {hasMap && (
+          <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-neutral-100">
+              <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Route map</span>
+            </div>
+            <Suspense fallback={
+              <div className="h-60 flex items-center justify-center bg-neutral-50">
+                <p className="text-xs text-neutral-400">Loading map…</p>
+              </div>
+            }>
+              <StageMap
+                gpx={gpx!}
+                waypointStart={stage.waypoint_start}
+                waypointFinish={stage.waypoint_finish}
+                labelStart={stage.waypoint_start || stage.start}
+                labelFinish={stage.waypoint_finish || stage.finish}
+              />
+            </Suspense>
+          </div>
+        )}
 
         {/* Accommodation */}
         {stage.accommodation_name && (
@@ -141,7 +185,7 @@ export default function DayCard() {
         )}
 
         {/* Weather */}
-        {(stage.lat && stage.lon) ? (
+        {(stage.lat && stage.lon) && (
           <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
@@ -171,7 +215,8 @@ export default function DayCard() {
                     <p className="text-3xl mt-1.5">{weatherIcon(day.weathercode)}</p>
                     <p className="text-xs text-neutral-500 mt-1 leading-tight">{weatherLabel(day.weathercode)}</p>
                     <p className="text-xs font-semibold text-neutral-800 mt-1.5">
-                      {Math.round(day.tmax)}° <span className="font-normal text-neutral-400">/ {Math.round(day.tmin)}°</span>
+                      {Math.round(day.tmax)}°{' '}
+                      <span className="font-normal text-neutral-400">/ {Math.round(day.tmin)}°</span>
                     </p>
                     {day.precip > 0 && (
                       <p className="text-xs text-blue-500 mt-0.5">💧 {day.precip} mm</p>
@@ -181,9 +226,7 @@ export default function DayCard() {
               </div>
             )}
           </div>
-        ) : null}
-
-        {/* Elevation profile — v2 with GPX */}
+        )}
       </div>
 
       {/* Prev / Next */}
@@ -219,11 +262,13 @@ function Metric({ icon, label, value }: { icon: string; label: string; value: st
 
 function formatDay(iso: string): string {
   if (!iso) return ''
-  const d = new Date(iso + 'T00:00:00')
-  return d.toLocaleDateString('en', { weekday: 'long', day: 'numeric', month: 'long' })
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  })
 }
 
 function shortDate(iso: string): string {
-  const d = new Date(iso + 'T00:00:00')
-  return d.toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' })
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en', {
+    weekday: 'short', day: 'numeric', month: 'short',
+  })
 }

@@ -36,3 +36,21 @@ export interface WeatherCache {
 export interface Progress {
   completedStages: number[]
 }
+
+export interface GpxWaypoint {
+  name: string
+  lat: number
+  lon: number
+  ele?: number
+}
+
+export interface GpxPoint {
+  lat: number
+  lon: number
+  ele?: number
+}
+
+export interface GpxData {
+  waypoints: GpxWaypoint[]
+  trackPoints: GpxPoint[]
+}
