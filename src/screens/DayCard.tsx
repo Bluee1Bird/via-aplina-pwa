@@ -110,13 +110,13 @@ export default function DayCard() {
             <Metric icon="⏱️" label="Duration" value={`${stage.duration_h} h`} />
           </div>
 
-          {/* Waypoints breadcrumb */}
-          {(stage.waypoint_start || stage.waypoint_finish) && (
+          {/* Waypoints breadcrumb — only shown when names differ from start/finish */}
+          {waypointsDiffer(stage) && (
             <div className="mt-4 flex items-center gap-2 text-xs text-neutral-500">
               <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
-              <span className="truncate">{stage.waypoint_start || stage.start}</span>
+              <span className="truncate">{stage.waypoint_start}</span>
               <span className="flex-1 border-t border-dashed border-neutral-300 mx-1" />
-              <span className="truncate">{stage.waypoint_finish || stage.finish}</span>
+              <span className="truncate">{stage.waypoint_finish}</span>
               <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
             </div>
           )}
@@ -175,7 +175,7 @@ export default function DayCard() {
             <div className="mt-2 flex items-center gap-2">
               <span className="text-base">👤</span>
               <div>
-                <p className="text-sm font-medium text-neutral-800">{companion.name}</p>
+                <p className="text-sm font-medium text-neutral-800">{formatCompanions(companion.name)}</p>
                 <p className="text-xs text-neutral-500 mt-0.5">
                   Day {companion.dayIndex} of {companion.totalDays} together
                 </p>
@@ -258,6 +258,16 @@ function Metric({ icon, label, value }: { icon: string; label: string; value: st
       <p className="text-sm font-semibold text-neutral-800 mt-0.5">{value}</p>
     </div>
   )
+}
+
+function formatCompanions(raw: string): string {
+  return raw.split(',').map(s => s.trim()).filter(Boolean).join(' & ')
+}
+
+function waypointsDiffer(stage: { start: string; finish: string; waypoint_start: string; waypoint_finish: string }): boolean {
+  const ws = stage.waypoint_start?.trim()
+  const wf = stage.waypoint_finish?.trim()
+  return !!(ws || wf) && (ws !== stage.start.trim() || wf !== stage.finish.trim())
 }
 
 function formatDay(iso: string): string {
