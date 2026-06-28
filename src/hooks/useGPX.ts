@@ -1,19 +1,37 @@
 import { useState, useEffect } from 'react'
-import type { GpxData } from '../lib/types'
+import type { GpxPoint } from '../lib/types'
 import { getDB } from '../lib/db'
 
-export function useGPX() {
-  const [gpx, setGpx] = useState<GpxData | null>(null)
+export function useStageGPX(stageId: number) {
+  const [trackPoints, setTrackPoints] = useState<GpxPoint[] | null>(null)
   const [loading, setLoading] = useState(true)
 
   const load = async () => {
+    setLoading(true)
     const db = await getDB()
-    const data = await db.get('gpx', 1)
-    setGpx(data ?? null)
+    const data = await db.get('gpx', stageId)
+    setTrackPoints(data?.trackPoints ?? null)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [stageId])
+
+  return { trackPoints, loading, reload: load }
+}
+
+export function useGPXStatus() {
+  const [loadedStages, setLoadedStages] = useState<number[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = async () => {
+    setLoading(true)
+    const db = await getDB()
+    const keys = await db.getAllKeys('gpx')
+    setLoadedStages(keys as number[])
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
 
-  return { gpx, loading, reload: load }
+  return { loadedStages, loading, reload: load }
 }

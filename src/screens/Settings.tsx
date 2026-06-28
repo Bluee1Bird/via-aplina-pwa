@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { parseAndStoreCSV } from '../lib/csv'
-import { parseAndStoreGPX } from '../lib/gpx'
+import { parseAndStoreStageGPX } from '../lib/gpx'
 import { useStages } from '../hooks/useStages'
-import { useGPX } from '../hooks/useGPX'
+import { useGPXStatus } from '../hooks/useGPX'
 
 export default function Settings() {
   const { stages, reload: reloadStages } = useStages()
-  const { gpx, reload: reloadGPX } = useGPX()
+  const { loadedStages, reload: reloadGPX } = useGPXStatus()
 
   const csvInputRef = useRef<HTMLInputElement>(null)
   const gpxInputRef = useRef<HTMLInputElement>(null)
@@ -35,24 +35,45 @@ export default function Settings() {
   }
 
   const handleGPXChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) return
     setGpxUploading(true)
     setGpxStatus(null)
-    try {
-      const { waypoints, trackPoints } = await parseAndStoreGPX(file)
-      await reloadGPX()
-      setGpxStatus({
-        type: 'success',
-        message: `Route loaded: ${trackPoints.toLocaleString()} track points, ${waypoints} waypoints.`,
-      })
-    } catch (err) {
-      setGpxStatus({ type: 'error', message: (err as Error).message })
-    } finally {
-      setGpxUploading(false)
-      if (gpxInputRef.current) gpxInputRef.current.value = ''
+
+    const succeeded: { stageNumber: number; trackPoints: number }[] = []
+    const errors: string[] = []
+
+    for (const file of files) {
+      try {
+        const result = await parseAndStoreStageGPX(file)
+        succeeded.push(result)
+      } catch (err) {
+        errors.push(`${file.name}: ${(err as Error).message}`)
+      }
     }
+
+    await reloadGPX()
+
+    if (errors.length === 0) {
+      const label = succeeded.length === 1
+        ? `Stage #${succeeded[0].stageNumber} loaded (${succeeded[0].trackPoints.toLocaleString()} pts).`
+        : `${succeeded.length} stages loaded (${succeeded.map(r => `#${r.stageNumber}`).join(', ')}).`
+      setGpxStatus({ type: 'success', message: label })
+    } else {
+      const parts = [
+        succeeded.length > 0 ? `${succeeded.length} loaded.` : '',
+        ...errors,
+      ].filter(Boolean)
+      setGpxStatus({ type: errors.length < files.length ? 'success' : 'error', message: parts.join(' ') })
+    }
+
+    setGpxUploading(false)
+    if (gpxInputRef.current) gpxInputRef.current.value = ''
   }
+
+  const gpxStatusLine = loadedStages.length > 0
+    ? `${loadedStages.length} stage${loadedStages.length !== 1 ? 's' : ''} with GPX (${[...loadedStages].sort((a, b) => a - b).map(n => `#${n}`).join(', ')})`
+    : 'No GPX files loaded'
 
   return (
     <div className="flex flex-col min-h-screen bg-neutral-50">
@@ -85,21 +106,17 @@ export default function Settings() {
         />
         <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCSVChange} />
 
-        {/* GPX upload */}
+        {/* GPX upload — multi-file */}
         <UploadCard
-          title="Route File (GPX)"
-          statusLine={
-            gpx
-              ? `Route loaded: ${gpx.trackPoints.length.toLocaleString()} pts, ${gpx.waypoints.length} waypoints`
-              : 'No route file loaded'
-          }
-          hint="Upload a single GPX file for the full route. Waypoint names should match the waypoint_start / waypoint_finish values in your CSV — they're used to slice the map view per stage."
-          buttonLabel={gpxUploading ? 'Uploading…' : gpx ? 'Replace GPX' : 'Upload GPX'}
+          title="Route Files (GPX)"
+          statusLine={gpxStatusLine}
+          hint="Select one or multiple GPX files exported from Swisstopo. Stage number is read from the filename or metadata — files must include #N (e.g. VA #4.gpx). You can also upload files one by one on each stage's detail screen."
+          buttonLabel={gpxUploading ? 'Uploading…' : loadedStages.length > 0 ? 'Add / Replace GPX' : 'Upload GPX files'}
           disabled={gpxUploading}
           onButtonClick={() => gpxInputRef.current?.click()}
           status={gpxStatus}
         />
-        <input ref={gpxInputRef} type="file" accept=".gpx" className="hidden" onChange={handleGPXChange} />
+        <input ref={gpxInputRef} type="file" accept=".gpx" multiple className="hidden" onChange={handleGPXChange} />
       </div>
     </div>
   )

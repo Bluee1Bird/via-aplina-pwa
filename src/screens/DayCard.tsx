@@ -1,15 +1,19 @@
-import { lazy, Suspense } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useRef, useState } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useStages } from '../hooks/useStages'
 import { useProgress } from '../hooks/useProgress'
 import { useCompanion } from '../hooks/useCompanion'
 import { useSwipe } from '../hooks/useSwipe'
-import { useWeather } from '../hooks/useWeather'
-import { useGPX } from '../hooks/useGPX'
-import { weatherIcon, weatherLabel } from '../lib/weather'
+import { useLocationWeather } from '../hooks/useWeather'
+import { useStageGPX } from '../hooks/useGPX'
+import { parseAndStoreStageGPX } from '../lib/gpx'
+import WeatherWidget from '../components/WeatherWidget'
 
-// Lazy-load the map so Leaflet CSS doesn't block initial render
 const StageMap = lazy(() => import('../components/StageMap'))
+
+const MAP_MIN = 120
+const MAP_MAX = 520
+const MAP_DEFAULT = 240
 
 export default function DayCard() {
   const { stageId } = useParams<{ stageId: string }>()
@@ -29,8 +33,62 @@ export default function DayCard() {
 
   const { completedStages, toggleStage } = useProgress(stages)
   const companion = useCompanion(stage, stages)
-  const weather = useWeather(stageNum, stage?.lat, stage?.lon)
-  const { gpx } = useGPX()
+  const { trackPoints, reload: reloadGPX } = useStageGPX(stageNum)
+
+  // Map resize — overlay approach: a fixed full-screen div captures all events during drag
+  const [mapHeight, setMapHeight] = useState(MAP_DEFAULT)
+  const [mapDragging, setMapDragging] = useState(false)
+  const mapDragRef = useRef<{ startY: number; startH: number } | null>(null)
+
+  const startMapDrag = (clientY: number) => {
+    mapDragRef.current = { startY: clientY, startH: mapHeight }
+    setMapDragging(true)
+  }
+  const moveMapDrag = (clientY: number) => {
+    if (!mapDragRef.current) return
+    setMapHeight(Math.max(MAP_MIN, Math.min(MAP_MAX, mapDragRef.current.startH + clientY - mapDragRef.current.startY)))
+  }
+  const endMapDrag = () => {
+    mapDragRef.current = null
+    setMapDragging(false)
+  }
+
+  // Per-stage GPX upload
+  const gpxInputRef = useRef<HTMLInputElement>(null)
+  const [gpxUploading, setGpxUploading] = useState(false)
+  const [gpxError, setGpxError] = useState<string | null>(null)
+
+  const handleGPXUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setGpxUploading(true)
+    setGpxError(null)
+    try {
+      await parseAndStoreStageGPX(file, stageNum)
+      await reloadGPX()
+    } catch (err) {
+      setGpxError((err as Error).message)
+    } finally {
+      setGpxUploading(false)
+      if (gpxInputRef.current) gpxInputRef.current.value = ''
+    }
+  }
+
+  // Weather — coordinates from GPX endpoints, fall back to CSV lat/lon for finish
+  const startPoint = trackPoints?.[0]
+  const finishPoint = trackPoints && trackPoints.length > 0 ? trackPoints[trackPoints.length - 1] : undefined
+  const finishLat = finishPoint?.lat ?? stage?.lat
+  const finishLon = finishPoint?.lon ?? stage?.lon
+
+  const startWeather = useLocationWeather(`${stageNum}-start`, startPoint?.lat, startPoint?.lon)
+  const finishWeather = useLocationWeather(`${stageNum}-finish`, finishLat, finishLon)
+
+  const [mapCollapsed, setMapCollapsed] = useState(false)
+  const [startWeatherCollapsed, setStartWeatherCollapsed] = useState(false)
+  const [finishWeatherCollapsed, setFinishWeatherCollapsed] = useState(false)
+
+  const hasStartWeather = !!(startPoint?.lat && startPoint?.lon)
+  const hasFinishWeather = !!(finishLat && finishLon)
 
   if (loading) {
     return (
@@ -52,10 +110,7 @@ export default function DayCard() {
   }
 
   const isDone = completedStages.has(stage.stage)
-  const minAgo = weather.fetchedAt ? Math.round((Date.now() - weather.fetchedAt) / 60000) : null
   const stagePosition = `Stage ${idx + 1} of ${sorted.length}`
-
-  const hasMap = gpx !== null && (stage.waypoint_start || stage.waypoint_finish)
 
   return (
     <div
@@ -63,9 +118,22 @@ export default function DayCard() {
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
+      {/* Full-screen overlay active while resizing the map — captures all mouse/touch events */}
+      {mapDragging && (
+        <div
+          className="fixed inset-0 select-none"
+          style={{ zIndex: 9999, cursor: 'ns-resize', touchAction: 'none' }}
+          onMouseMove={e => moveMapDrag(e.clientY)}
+          onMouseUp={endMapDrag}
+          onMouseLeave={endMapDrag}
+          onTouchMove={e => moveMapDrag(e.touches[0].clientY)}
+          onTouchEnd={endMapDrag}
+        />
+      )}
+
       {/* Header */}
       <header className="bg-white border-b border-neutral-200 px-4 pt-12 pb-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => navigate('/')}
             className="p-1.5 -ml-1.5 text-neutral-500 shrink-0"
@@ -93,6 +161,17 @@ export default function DayCard() {
             <span>{isDone ? '✓' : '○'}</span>
             <span>{isDone ? 'Done' : 'Mark done'}</span>
           </button>
+          {/* Settings */}
+          <Link
+            to="/settings"
+            className="shrink-0 p-1.5 -mr-1 text-neutral-400"
+            aria-label="Settings"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </Link>
         </div>
       </header>
 
@@ -110,7 +189,6 @@ export default function DayCard() {
             <Metric icon="⏱️" label="Duration" value={`${stage.duration_h} h`} />
           </div>
 
-          {/* Waypoints breadcrumb — only shown when names differ from start/finish */}
           {waypointsDiffer(stage) && (
             <div className="mt-4 flex items-center gap-2 text-xs text-neutral-500">
               <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
@@ -122,27 +200,66 @@ export default function DayCard() {
           )}
         </div>
 
-        {/* Map */}
-        {hasMap && (
-          <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-neutral-100">
+        {/* Map — collapsable, with resize handle */}
+        <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+          <div className="flex items-center">
+            <button
+              onClick={() => setMapCollapsed(c => !c)}
+              className="flex-1 px-4 py-3 flex items-center gap-2 text-left"
+            >
               <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Route map</span>
-            </div>
-            <Suspense fallback={
-              <div className="h-60 flex items-center justify-center bg-neutral-50">
-                <p className="text-xs text-neutral-400">Loading map…</p>
-              </div>
-            }>
-              <StageMap
-                gpx={gpx!}
-                waypointStart={stage.waypoint_start}
-                waypointFinish={stage.waypoint_finish}
-                labelStart={stage.waypoint_start || stage.start}
-                labelFinish={stage.waypoint_finish || stage.finish}
-              />
-            </Suspense>
+              <svg
+                className={`w-3.5 h-3.5 text-neutral-400 shrink-0 transition-transform duration-200 ${mapCollapsed ? '' : 'rotate-180'}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <button
+              onClick={() => gpxInputRef.current?.click()}
+              disabled={gpxUploading}
+              className="px-4 py-3 text-xs text-green-700 font-medium disabled:opacity-50 shrink-0 border-l border-neutral-100"
+            >
+              {gpxUploading ? 'Uploading…' : trackPoints ? 'Replace GPX' : 'Upload GPX'}
+            </button>
           </div>
-        )}
+
+          {!mapCollapsed && (
+            <>
+              <div className="border-t border-neutral-100">
+                {trackPoints ? (
+                  <Suspense fallback={
+                    <div style={{ height: mapHeight }} className="flex items-center justify-center bg-neutral-50">
+                      <p className="text-xs text-neutral-400">Loading map…</p>
+                    </div>
+                  }>
+                    <StageMap
+                      trackPoints={trackPoints}
+                      labelStart={stage.start}
+                      labelFinish={stage.finish}
+                      height={mapHeight}
+                    />
+                  </Suspense>
+                ) : (
+                  <div style={{ height: mapHeight }} className="flex flex-col items-center justify-center gap-1.5 bg-neutral-50">
+                    <p className="text-xs text-neutral-400">No route file for this stage</p>
+                    {gpxError && <p className="text-xs text-red-500 px-6 text-center">{gpxError}</p>}
+                  </div>
+                )}
+              </div>
+
+              {/* Drag-to-resize handle */}
+              <div
+                onMouseDown={e => { e.preventDefault(); startMapDrag(e.clientY) }}
+                onTouchStart={e => { e.stopPropagation(); startMapDrag(e.touches[0].clientY) }}
+                className="h-6 flex items-center justify-center cursor-ns-resize border-t border-neutral-100 bg-neutral-50 select-none"
+              >
+                <div className="w-10 h-1 rounded-full bg-neutral-300" />
+              </div>
+            </>
+          )}
+        </div>
+        <input ref={gpxInputRef} type="file" accept=".gpx" className="hidden" onChange={handleGPXUpload} />
 
         {/* Accommodation */}
         {stage.accommodation_name && (
@@ -184,45 +301,35 @@ export default function DayCard() {
           </div>
         )}
 
-        {/* Weather */}
-        {(stage.lat && stage.lon) && (
-          <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-                Weather at finish
-              </span>
-              {weather.stale && minAgo !== null && (
-                <span className="text-xs text-amber-500">⚠️ {minAgo} min ago</span>
-              )}
-            </div>
-
-            {weather.loading && (
-              <p className="text-xs text-neutral-400 py-2">Fetching forecast…</p>
+        {/* Weather — side by side when both present */}
+        {(hasStartWeather || hasFinishWeather) && (
+          <div className={`flex gap-3 ${hasStartWeather && hasFinishWeather ? '' : ''}`}>
+            {hasStartWeather && (
+              <div className="flex-1 min-w-0">
+                <WeatherWidget
+                  label="Start"
+                  day={startWeather.day}
+                  loading={startWeather.loading}
+                  error={startWeather.error}
+                  fetchedAt={startWeather.fetchedAt}
+                  stale={startWeather.stale}
+                  collapsed={startWeatherCollapsed}
+                  onToggle={() => setStartWeatherCollapsed(c => !c)}
+                />
+              </div>
             )}
-            {weather.error && !weather.data && (
-              <p className="text-xs text-red-500 py-2">{weather.error}</p>
-            )}
-            {weather.data && (
-              <div className="grid grid-cols-3 gap-2">
-                {weather.data.daily.map((day, i) => (
-                  <div
-                    key={day.date}
-                    className={`rounded-xl p-3 text-center border ${
-                      i === 0 ? 'bg-green-50 border-green-200' : 'bg-neutral-50 border-neutral-200'
-                    }`}
-                  >
-                    <p className="text-xs text-neutral-500 font-medium">{shortDate(day.date)}</p>
-                    <p className="text-3xl mt-1.5">{weatherIcon(day.weathercode)}</p>
-                    <p className="text-xs text-neutral-500 mt-1 leading-tight">{weatherLabel(day.weathercode)}</p>
-                    <p className="text-xs font-semibold text-neutral-800 mt-1.5">
-                      {Math.round(day.tmax)}°{' '}
-                      <span className="font-normal text-neutral-400">/ {Math.round(day.tmin)}°</span>
-                    </p>
-                    {day.precip > 0 && (
-                      <p className="text-xs text-blue-500 mt-0.5">💧 {day.precip} mm</p>
-                    )}
-                  </div>
-                ))}
+            {hasFinishWeather && (
+              <div className="flex-1 min-w-0">
+                <WeatherWidget
+                  label="Finish"
+                  day={finishWeather.day}
+                  loading={finishWeather.loading}
+                  error={finishWeather.error}
+                  fetchedAt={finishWeather.fetchedAt}
+                  stale={finishWeather.stale}
+                  collapsed={finishWeatherCollapsed}
+                  onToggle={() => setFinishWeatherCollapsed(c => !c)}
+                />
               </div>
             )}
           </div>
@@ -277,8 +384,3 @@ function formatDay(iso: string): string {
   })
 }
 
-function shortDate(iso: string): string {
-  return new Date(iso + 'T00:00:00').toLocaleDateString('en', {
-    weekday: 'short', day: 'numeric', month: 'short',
-  })
-}

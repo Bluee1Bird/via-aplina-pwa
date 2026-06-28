@@ -8,10 +8,42 @@ body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Force default (arrow) cursor everywhere — prevents the I-beam from appearing
+   over text in a PWA context. cursor:auto lets the browser decide; cursor:default
+   always shows the arrow. Interactive elements override below. */
+* {
+  cursor: default;
+}
+
+button, a, [role="button"], select {
+  cursor: pointer;
+}
+
+input, textarea, [contenteditable] {
+  cursor: text;
 }
 
 #root {
   min-height: 100svh;
+}
+
+@keyframes celebTitle {
+  from { opacity: 0; transform: translateY(-28px) scale(0.88); }
+  to   { opacity: 1; transform: translateY(0)     scale(1);    }
+}
+
+@keyframes hedgehogBounce {
+  0%,100% { transform: translateY(0)    rotate(0deg);   }
+  35%     { transform: translateY(-12px) rotate(-12deg); }
+  70%     { transform: translateY(-5px)  rotate(6deg);   }
+}
+
+@keyframes dimFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .safe-area-bottom {

@@ -23,13 +23,10 @@ export interface WeatherDay {
   precip: number
 }
 
-export interface WeatherData {
-  daily: WeatherDay[]
-}
 
 export interface WeatherCache {
-  stageId: number
-  data: WeatherData
+  key: string      // `${stageId}-start` | `${stageId}-finish`
+  day: WeatherDay
   fetchedAt: number
 }
 
@@ -52,5 +49,9 @@ export interface GpxPoint {
 
 export interface GpxData {
   waypoints: GpxWaypoint[]
+  trackPoints: GpxPoint[]
+}
+
+export interface StageGpxData {
   trackPoints: GpxPoint[]
 }

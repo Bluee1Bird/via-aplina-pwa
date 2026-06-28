@@ -1,19 +1,19 @@
-import type { WeatherCache, WeatherData, WeatherDay } from './types'
+import type { WeatherCache, WeatherDay } from './types'
 import { getDB } from './db'
 
 const TTL_MS = 15 * 60 * 1000
 
-export async function fetchWeather(
-  stageId: number,
+export async function fetchLocationWeather(
+  cacheKey: string,
   lat: number,
   lon: number,
-): Promise<{ data: WeatherData; stale: boolean; fetchedAt: number }> {
+): Promise<{ day: WeatherDay; stale: boolean; fetchedAt: number }> {
   const db = await getDB()
-  const cached = await db.get('weather', stageId)
+  const cached = await db.get('weather', cacheKey)
   const now = Date.now()
 
   if (cached && now - cached.fetchedAt < TTL_MS) {
-    return { data: cached.data, stale: false, fetchedAt: cached.fetchedAt }
+    return { day: cached.day, stale: false, fetchedAt: cached.fetchedAt }
   }
 
   try {
@@ -21,29 +21,28 @@ export async function fetchWeather(
       `https://api.open-meteo.com/v1/forecast` +
       `?latitude=${lat}&longitude=${lon}` +
       `&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum` +
-      `&timezone=auto&forecast_days=3`
+      `&timezone=auto&forecast_days=1`
     const res = await fetch(url)
     if (!res.ok) throw new Error('Network error')
     const json = await res.json()
 
-    const daily: WeatherDay[] = (json.daily.time as string[]).map((date, i) => ({
-      date,
-      weathercode: json.daily.weathercode[i] as number,
-      tmax: json.daily.temperature_2m_max[i] as number,
-      tmin: json.daily.temperature_2m_min[i] as number,
-      precip: json.daily.precipitation_sum[i] as number,
-    }))
+    const day: WeatherDay = {
+      date: (json.daily.time as string[])[0],
+      weathercode: (json.daily.weathercode as number[])[0],
+      tmax: (json.daily.temperature_2m_max as number[])[0],
+      tmin: (json.daily.temperature_2m_min as number[])[0],
+      precip: (json.daily.precipitation_sum as number[])[0],
+    }
 
-    const data: WeatherData = { daily }
-    const entry: WeatherCache = { stageId, data, fetchedAt: now }
+    const entry: WeatherCache = { key: cacheKey, day, fetchedAt: now }
     await db.put('weather', entry)
 
-    return { data, stale: false, fetchedAt: now }
+    return { day, stale: false, fetchedAt: now }
   } catch {
     if (cached) {
-      return { data: cached.data, stale: true, fetchedAt: cached.fetchedAt }
+      return { day: cached.day, stale: true, fetchedAt: cached.fetchedAt }
     }
-    throw new Error('No weather data available')
+    throw new Error('No weather data available offline')
   }
 }
 

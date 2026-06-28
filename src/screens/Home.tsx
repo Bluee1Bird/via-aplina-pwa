@@ -1,11 +1,20 @@
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useStages } from '../hooks/useStages'
 import { useProgress } from '../hooks/useProgress'
+import CompletionCelebration from '../components/CompletionCelebration'
 
 export default function Home() {
   const { stages, loading } = useStages()
   const { completedStages, currentStage, completedCount, allDone, toggleStage, markNextDone } = useProgress(stages)
   const navigate = useNavigate()
+  const [celebrationDismissed, setCelebrationDismissed] = useState(false)
+
+  useEffect(() => {
+    if (!allDone) setCelebrationDismissed(false)
+  }, [allDone])
+
+  const showCelebration = allDone && !celebrationDismissed
 
   if (loading) {
     return (
@@ -37,6 +46,8 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen bg-neutral-50">
+      {showCelebration && <CompletionCelebration onDismiss={() => setCelebrationDismissed(true)} />}
+
       {/* Header */}
       <header className="flex items-center justify-between px-4 pt-12 pb-4 bg-white border-b border-neutral-200">
         <h1 className="text-lg font-semibold text-neutral-800">Via Alpina</h1>

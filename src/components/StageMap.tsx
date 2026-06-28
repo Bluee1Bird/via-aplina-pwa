@@ -1,34 +1,41 @@
 import 'leaflet/dist/leaflet.css'
-import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip } from 'react-leaflet'
-import type { GpxData, GpxPoint } from '../lib/types'
-import { sliceTrackForStage } from '../lib/gpx'
+import { useEffect } from 'react'
+import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet'
+import type { GpxPoint } from '../lib/types'
 
 interface Props {
-  gpx: GpxData
-  waypointStart: string
-  waypointFinish: string
+  trackPoints: GpxPoint[]
   labelStart: string
   labelFinish: string
+  height?: number
 }
 
-export default function StageMap({ gpx, waypointStart, waypointFinish, labelStart, labelFinish }: Props) {
-  const segment = sliceTrackForStage(gpx, waypointStart, waypointFinish)
+// Tells Leaflet to recalculate tile layout after container height changes
+function MapResizer({ height }: { height: number }) {
+  const map = useMap()
+  useEffect(() => {
+    map.invalidateSize()
+  }, [height, map])
+  return null
+}
 
-  if (segment.length === 0) return null
+export default function StageMap({ trackPoints, labelStart, labelFinish, height = 240 }: Props) {
+  if (trackPoints.length === 0) return null
 
-  const positions = segment.map(p => [p.lat, p.lon] as [number, number])
-  const center = midpoint(segment)
-  const start = segment[0]
-  const finish = segment[segment.length - 1]
+  const positions = trackPoints.map(p => [p.lat, p.lon] as [number, number])
+  const center = trackPoints[Math.floor(trackPoints.length / 2)]
+  const start = trackPoints[0]
+  const finish = trackPoints[trackPoints.length - 1]
 
   return (
     <MapContainer
       center={[center.lat, center.lon]}
-      zoom={calculateZoom(segment)}
+      zoom={calculateZoom(trackPoints)}
       scrollWheelZoom={false}
-      style={{ height: '240px', width: '100%', borderRadius: '12px' }}
+      style={{ height: `${height}px`, width: '100%' }}
       zoomControl={true}
     >
+      <MapResizer height={height} />
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -58,10 +65,6 @@ export default function StageMap({ gpx, waypointStart, waypointFinish, labelStar
       </CircleMarker>
     </MapContainer>
   )
-}
-
-function midpoint(points: GpxPoint[]): GpxPoint {
-  return points[Math.floor(points.length / 2)]
 }
 
 function calculateZoom(points: GpxPoint[]): number {
