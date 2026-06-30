@@ -93,6 +93,7 @@ Optional: `lat`, `lon` (float) — enables weather per stage.
 The two install targets use different engines (WebKit vs Blink). Verified gotchas / rules:
 - **No `AbortSignal.timeout()`** — iOS Safari 16+ only. Use `AbortController` + `setTimeout` (see `fetchOverpassPOIs`).
 - **CSS viewport units need fallbacks** — `min-height: 100svh` must be preceded by `100vh` for older WebKit.
+- **`<input type="file" accept>` must list MIME types, not just extensions** — iOS Files resolves `accept` to UTIs, so bare `accept=".csv"` greys out `.txt` files (and `.gpx` can grey out entirely). List both: CSV input uses `.csv,.txt,text/csv,text/plain,text/comma-separated-values`; GPX inputs use `.gpx,application/gpx+xml,application/xml,text/xml`. (papaparse/the GPX parser accept any text, so widening `accept` is safe.)
 - **Safe areas** — fixed bottom bars use the `.safe-area-bottom` utility (`env(safe-area-inset-bottom)`); headers use `pt-12` so content clears the iOS status bar with `apple-mobile-web-app-status-bar-style: black-translucent` + `viewport-fit=cover`.
 - **Drag must use Pointer Events + `setPointerCapture`** (works on touch; see below). SMIL (`<animateMotion>`) and CSS transforms on SVG work in both engines.
 - IndexedDB, service workers, `flatMap`, optional chaining all fine on both. iOS *can* evict IndexedDB/PWA cache under storage pressure or long disuse — data is per-device, no sync.

@@ -291,7 +291,7 @@ export default function DayCard() {
             </>
           )}
         </div>
-        <input ref={gpxInputRef} type="file" accept=".gpx" className="hidden" onChange={handleGPXUpload} />
+        <input ref={gpxInputRef} type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" className="hidden" onChange={handleGPXUpload} />
 
         {/* Accommodation */}
         {stage.accommodation_name && (

@@ -104,7 +104,10 @@ export default function Settings() {
           onButtonClick={() => csvInputRef.current?.click()}
           status={csvStatus}
         />
-        <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCSVChange} />
+        {/* accept lists both extensions AND MIME types: iOS Files resolves `accept`
+            to UTIs, where bare `.csv` (→ public.comma-separated-values-text) greys
+            out `.txt` files. Adding text/plain + .txt makes both selectable. */}
+        <input ref={csvInputRef} type="file" accept=".csv,.txt,text/csv,text/plain,text/comma-separated-values" className="hidden" onChange={handleCSVChange} />
 
         {/* GPX upload — multi-file */}
         <UploadCard
@@ -116,7 +119,7 @@ export default function Settings() {
           onButtonClick={() => gpxInputRef.current?.click()}
           status={gpxStatus}
         />
-        <input ref={gpxInputRef} type="file" accept=".gpx" multiple className="hidden" onChange={handleGPXChange} />
+        <input ref={gpxInputRef} type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" multiple className="hidden" onChange={handleGPXChange} />
       </div>
     </div>
   )
