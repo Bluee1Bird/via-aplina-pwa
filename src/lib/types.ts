@@ -55,3 +55,17 @@ export interface GpxData {
 export interface StageGpxData {
   trackPoints: GpxPoint[]
 }
+
+export interface AccommodationContact {
+  placeName?: string
+  phone?: string
+  website?: string
+  address?: string
+  fetchedAt: number
+  fetchError?: string
+}
+
+export interface AccommodationContactCache {
+  stageId: number
+  contact: AccommodationContact
+}

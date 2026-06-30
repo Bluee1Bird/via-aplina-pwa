@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useStages } from '../hooks/useStages'
 import { useProgress } from '../hooks/useProgress'
@@ -6,7 +6,9 @@ import { useCompanion } from '../hooks/useCompanion'
 import { useSwipe } from '../hooks/useSwipe'
 import { useLocationWeather } from '../hooks/useWeather'
 import { useStageGPX } from '../hooks/useGPX'
+import { useAccommodationContacts } from '../hooks/useAccommodationContacts'
 import { parseAndStoreStageGPX } from '../lib/gpx'
+import { isUrl, fetchAccommodationContact } from '../lib/accommodations'
 import WeatherWidget from '../components/WeatherWidget'
 
 const StageMap = lazy(() => import('../components/StageMap'))
@@ -33,24 +35,45 @@ export default function DayCard() {
 
   const { completedStages, toggleStage } = useProgress(stages)
   const companion = useCompanion(stage, stages)
+  const contacts = useAccommodationContacts()
+  const contact = stage ? contacts.get(stage.stage) : undefined
+  const companionStaysOvernight = companion ? companion.dayIndex < companion.totalDays : false
   const { trackPoints, reload: reloadGPX } = useStageGPX(stageNum)
 
-  // Map resize — overlay approach: a fixed full-screen div captures all events during drag
+  // Map resize via Pointer Events + setPointerCapture — works uniformly for
+  // mouse, touch and pen (touch events stay bound to their start target, which
+  // is why the old full-screen-overlay approach silently failed on mobile).
   const [mapHeight, setMapHeight] = useState(MAP_DEFAULT)
   const [mapDragging, setMapDragging] = useState(false)
   const mapDragRef = useRef<{ startY: number; startH: number } | null>(null)
+  // Pointer events fire faster than the screen refreshes; coalesce to one
+  // setState per animation frame so a heavy map doesn't re-render per event.
+  const latestY = useRef(0)
+  const rafRef = useRef<number | null>(null)
 
-  const startMapDrag = (clientY: number) => {
-    mapDragRef.current = { startY: clientY, startH: mapHeight }
+  const onHandleDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    mapDragRef.current = { startY: e.clientY, startH: mapHeight }
     setMapDragging(true)
   }
-  const moveMapDrag = (clientY: number) => {
+  const onHandleMove = (e: React.PointerEvent) => {
     if (!mapDragRef.current) return
-    setMapHeight(Math.max(MAP_MIN, Math.min(MAP_MAX, mapDragRef.current.startH + clientY - mapDragRef.current.startY)))
+    latestY.current = e.clientY
+    if (rafRef.current != null) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null
+      const d = mapDragRef.current
+      if (!d) return
+      setMapHeight(Math.max(MAP_MIN, Math.min(MAP_MAX, d.startH + latestY.current - d.startY)))
+    })
   }
-  const endMapDrag = () => {
+  const onHandleUp = (e: React.PointerEvent) => {
+    if (!mapDragRef.current) return
     mapDragRef.current = null
     setMapDragging(false)
+    if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
   }
 
   // Per-stage GPX upload
@@ -90,6 +113,23 @@ export default function DayCard() {
   const hasStartWeather = !!(startPoint?.lat && startPoint?.lon)
   const hasFinishWeather = !!(finishLat && finishLon)
 
+  // Reset scroll to the top when moving between stages (the screen doesn't
+  // remount on param change, so it would otherwise stay scrolled down).
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { scrollRef.current?.scrollTo(0, 0) }, [stageNum])
+
+  // Retry contact lookup when viewing a stage whose accommodation link never
+  // resolved (e.g. the proxy was down at CSV-upload time). One attempt per
+  // stage per session — the ref guard stops it from looping on a cached error.
+  const contactTried = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    if (!stage || !stage.accommodation_url || !isUrl(stage.accommodation_url)) return
+    if (contact && !contact.fetchError) return
+    if (contactTried.current.has(stage.stage)) return
+    contactTried.current.add(stage.stage)
+    fetchAccommodationContact(stage.accommodation_url, stage.stage).catch(() => {})
+  }, [stage, contact])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -118,19 +158,6 @@ export default function DayCard() {
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
-      {/* Full-screen overlay active while resizing the map — captures all mouse/touch events */}
-      {mapDragging && (
-        <div
-          className="fixed inset-0 select-none"
-          style={{ zIndex: 9999, cursor: 'ns-resize', touchAction: 'none' }}
-          onMouseMove={e => moveMapDrag(e.clientY)}
-          onMouseUp={endMapDrag}
-          onMouseLeave={endMapDrag}
-          onTouchMove={e => moveMapDrag(e.touches[0].clientY)}
-          onTouchEnd={endMapDrag}
-        />
-      )}
-
       {/* Header */}
       <header className="bg-white border-b border-neutral-200 px-4 pt-12 pb-4">
         <div className="flex items-center gap-2">
@@ -175,7 +202,7 @@ export default function DayCard() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 pb-28">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 pb-28">
 
         {/* Route stats */}
         <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
@@ -200,8 +227,9 @@ export default function DayCard() {
           )}
         </div>
 
-        {/* Map — collapsable, with resize handle */}
-        <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+        {/* Map — collapsable, with resize handle. data-no-swipe stops map panning
+            and handle dragging from triggering stage navigation. */}
+        <div data-no-swipe className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
           <div className="flex items-center">
             <button
               onClick={() => setMapCollapsed(c => !c)}
@@ -234,6 +262,7 @@ export default function DayCard() {
                     </div>
                   }>
                     <StageMap
+                      key={stageNum}
                       trackPoints={trackPoints}
                       labelStart={stage.start}
                       labelFinish={stage.finish}
@@ -248,13 +277,18 @@ export default function DayCard() {
                 )}
               </div>
 
-              {/* Drag-to-resize handle */}
+              {/* Drag-to-resize handle (pointer events + capture → works on touch) */}
               <div
-                onMouseDown={e => { e.preventDefault(); startMapDrag(e.clientY) }}
-                onTouchStart={e => { e.stopPropagation(); startMapDrag(e.touches[0].clientY) }}
-                className="h-6 flex items-center justify-center cursor-ns-resize border-t border-neutral-100 bg-neutral-50 select-none"
+                onPointerDown={onHandleDown}
+                onPointerMove={onHandleMove}
+                onPointerUp={onHandleUp}
+                onPointerCancel={onHandleUp}
+                style={{ touchAction: 'none' }}
+                className={`h-7 flex items-center justify-center gap-2 cursor-ns-resize border-t border-neutral-100 select-none transition-colors ${mapDragging ? 'bg-green-50' : 'bg-neutral-50'}`}
+                aria-label="Drag to resize map"
               >
-                <div className="w-10 h-1 rounded-full bg-neutral-300" />
+                <div className={`w-10 h-1 rounded-full transition-colors ${mapDragging ? 'bg-green-500' : 'bg-neutral-300'}`} />
+                {mapDragging && <span className="text-[10px] text-neutral-400 tabular-nums">{Math.round(mapHeight)}px</span>}
               </div>
             </>
           )}
@@ -268,7 +302,7 @@ export default function DayCard() {
             <div className="mt-2 flex items-start gap-2">
               <span className="text-base shrink-0">🏠</span>
               <div className="flex-1 min-w-0">
-                {stage.accommodation_url ? (
+                {stage.accommodation_url && isUrl(stage.accommodation_url) ? (
                   <a
                     href={stage.accommodation_url}
                     target="_blank"
@@ -279,6 +313,38 @@ export default function DayCard() {
                   </a>
                 ) : (
                   <p className="text-sm font-medium text-neutral-800 break-words">{stage.accommodation_name}</p>
+                )}
+
+                {/* Contact info fetched from URL */}
+                {contact && !contact.fetchError && (
+                  <div className="mt-2 space-y-1">
+                    {contact.phone && (
+                      <a
+                        href={`tel:${contact.phone}`}
+                        className="flex items-center gap-1.5 text-xs text-neutral-700 hover:text-green-700"
+                      >
+                        <span>📞</span>
+                        <span>{contact.phone}</span>
+                      </a>
+                    )}
+                    {contact.website && (
+                      <a
+                        href={contact.website}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-green-700 underline underline-offset-1 break-all"
+                      >
+                        <span>🌐</span>
+                        <span>{contact.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
+                      </a>
+                    )}
+                    {contact.address && (
+                      <p className="flex items-start gap-1.5 text-xs text-neutral-500">
+                        <span>📍</span>
+                        <span>{contact.address}</span>
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -291,8 +357,15 @@ export default function DayCard() {
             <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Companion</span>
             <div className="mt-2 flex items-center gap-2">
               <span className="text-base">👤</span>
-              <div>
-                <p className="text-sm font-medium text-neutral-800">{formatCompanions(companion.name)}</p>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium text-neutral-800">{formatCompanions(companion.name)}</p>
+                  {companionStaysOvernight && (
+                    <span className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
+                      🌙 Staying tonight
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-neutral-500 mt-0.5">
                   Day {companion.dayIndex} of {companion.totalDays} together
                 </p>

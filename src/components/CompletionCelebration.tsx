@@ -18,6 +18,19 @@ const TREES: [number, number, number][] = [
   [244, 472, 11], [264, 468, 14],
 ]
 
+// Hedgehog spines (local coords, facing right): [baseX, baseY, tipX, tipY, halfWidth].
+// Pointed triangles fanning over the back — finer & spikier than rounded blobs.
+const SPINES_BACK: [number, number, number, number, number][] = [
+  [6, 22, 0, 7, 3], [11, 19, 5, 2, 3.2], [16, 17, 12, 0, 3.2], [21, 16, 18, -1, 3.2],
+  [26, 16, 24, 0, 3.2], [30, 17, 30, 1, 3], [34, 19, 37, 4, 3], [37, 22, 42, 9, 2.8],
+]
+const SPINES_FRONT: [number, number, number, number, number][] = [
+  [9, 21, 4, 10, 2.4], [14, 18, 10, 6, 2.6], [19, 16.5, 16, 5, 2.6],
+  [24, 16, 22, 5, 2.6], [28, 16.5, 27, 5, 2.4], [32, 18, 33, 8, 2.4],
+]
+const spinePath = ([bx, by, tx, ty, w]: [number, number, number, number, number]) =>
+  `M${bx - w} ${by} L${tx} ${ty} L${bx + w} ${by} Z`
+
 interface Props {
   onDismiss: () => void
 }
@@ -78,8 +91,10 @@ export default function CompletionCelebration({ onDismiss }: Props) {
           style={{ display: 'block' }}
         >
           <defs>
-            {/* Path the hedgehog follows — right slope, base → peak */}
-            <path id="climbPath" d="M 342 468 C 308 390 262 285 202 130"/>
+            {/* Path the hedgehog follows — up the right slope, then crests the
+                ridge so the final tangent is horizontal and it ends UPRIGHT on
+                the summit (rotate="auto" freezes at the last tangent angle). */}
+            <path id="climbPath" d="M 342 468 C 305 380 232 212 205 152 C 198 136 206 131 216 131"/>
             <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
               <stop offset="0%"   stopColor="#fef3c7" stopOpacity="0.5"/>
               <stop offset="100%" stopColor="#fef3c7" stopOpacity="0"/>
@@ -129,49 +144,50 @@ export default function CompletionCelebration({ onDismiss }: Props) {
               <mpath href="#climbPath"/>
             </animateMotion>
 
-            {/* Bounce starts when climb ends */}
-            <g style={{ animation: 'hedgehogBounce 0.55s ease-in-out 2.75s 5' }}>
+            {/* A few gentle happy hops when the climb ends */}
+            <g style={{ animation: 'hedgehogBounce 0.5s ease-in-out 2.75s 3' }}>
               {/* Hedgehog, drawn facing right (+X = forward for rotate="auto") */}
-              <g transform="translate(-26, -20)">
-                {/* Rounded quills — rotated ellipses fanning out from the back */}
-                <ellipse cx="5"  cy="16" rx="5"   ry="9.5" fill="#3e2723" transform="rotate(-38 5 16)"/>
-                <ellipse cx="13" cy="9"  rx="5"   ry="9.5" fill="#3e2723" transform="rotate(-18 13 9)"/>
-                <ellipse cx="22" cy="6"  rx="5"   ry="9"   fill="#4a2c20" transform="rotate(0 22 6)"/>
-                <ellipse cx="31" cy="9"  rx="4.5" ry="8.5" fill="#4a2c20" transform="rotate(18 31 9)"/>
-                <ellipse cx="38" cy="16" rx="4.5" ry="8"   fill="#5c3d2e" transform="rotate(34 38 16)"/>
+              <g transform="translate(-34, -28) scale(1.25)">
+                {/* Soft contact shadow */}
+                <ellipse cx="24" cy="43" rx="20" ry="3" fill="#000" opacity="0.12"/>
+
+                {/* Little feet (behind body) */}
+                <ellipse cx="12" cy="40" rx="4.6" ry="2.6" fill="#5b4133"/>
+                <ellipse cx="22" cy="42" rx="4.6" ry="2.6" fill="#6a4d3c"/>
+                <ellipse cx="31" cy="41.5" rx="4.4" ry="2.5" fill="#5b4133"/>
 
                 {/* Body */}
-                <ellipse cx="21" cy="28" rx="21" ry="14" fill="#6d4c41"/>
+                <ellipse cx="22" cy="29" rx="20" ry="13.5" fill="#6f5140"/>
+                {/* Pale underside */}
+                <ellipse cx="26" cy="34" rx="13" ry="6.5" fill="#cdb094" opacity="0.45"/>
 
-                {/* Large round face */}
-                <circle cx="35" cy="27" r="17" fill="#d4956a"/>
+                {/* Spiny coat — two layers of fine pointed quills */}
+                <g>
+                  {SPINES_BACK.map((s, i) => <path key={`b${i}`} d={spinePath(s)} fill="#3f291d"/>)}
+                  {SPINES_FRONT.map((s, i) => <path key={`f${i}`} d={spinePath(s)} fill="#5c4030"/>)}
+                </g>
 
-                {/* Big cute eye — sclera → iris → pupil → two shines */}
-                <circle cx="39"   cy="21"   r="8.5" fill="#1a0805"/>
-                <circle cx="40"   cy="21"   r="6.5" fill="#3b1808"/>
-                <circle cx="40.5" cy="21"   r="3.8" fill="#0a0404"/>
-                <circle cx="43.5" cy="18"   r="2.8" fill="white"/>
-                <circle cx="38.5" cy="23.5" r="1.3" fill="rgba(255,255,255,0.55)"/>
+                {/* Head */}
+                <circle cx="38" cy="28" r="14.5" fill="#d8b48d"/>
+                {/* Snout */}
+                <path d="M46 22 Q57 24 56 30 Q55 35 46 34 Z" fill="#e3c4a2"/>
 
-                {/* Blush */}
-                <ellipse cx="47" cy="28" rx="4.5" ry="2.7" fill="#e91e8c" opacity="0.22"/>
+                {/* Ear */}
+                <ellipse cx="35" cy="15.5" rx="3.6" ry="3.1" fill="#b48f6a" transform="rotate(-18 35 15.5)"/>
 
-                {/* Small ear */}
-                <ellipse cx="33" cy="12" rx="3.8" ry="3.2" fill="#bf8d5e" transform="rotate(-18 33 12)"/>
+                {/* Eye — modest, single soft catchlight */}
+                <circle cx="41.5" cy="24.5" r="4.4" fill="#241310"/>
+                <circle cx="43.2" cy="22.8" r="1.5" fill="#fff" opacity="0.85"/>
 
-                {/* Button nose */}
-                <ellipse cx="50" cy="26" rx="4.2" ry="3.8" fill="#f8a8c8"/>
-                <circle  cx="50" cy="25"   r="2.2"  fill="#d81b60"/>
-                <circle  cx="48.8" cy="24.2" r="0.9" fill="white" opacity="0.72"/>
+                {/* Subtle blush */}
+                <ellipse cx="47" cy="30" rx="3.6" ry="2.2" fill="#e07a92" opacity="0.22"/>
 
-                {/* Happy smile */}
-                <path d="M 46 30.5 Q 50 36 54 30.5" stroke="#b5004b" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+                {/* Nose */}
+                <ellipse cx="56" cy="28.5" rx="2.9" ry="2.6" fill="#2c1a14"/>
+                <circle cx="55" cy="27.6" r="0.8" fill="#fff" opacity="0.6"/>
 
-                {/* Stubby feet */}
-                <ellipse cx="8"  cy="39" rx="5.5" ry="3"   fill="#5d4037"/>
-                <ellipse cx="19" cy="42" rx="5.5" ry="3"   fill="#5d4037"/>
-                <ellipse cx="30" cy="42" rx="5.5" ry="3"   fill="#5d4037"/>
-                <ellipse cx="41" cy="39" rx="5"   ry="2.8" fill="#5d4037"/>
+                {/* Gentle smile */}
+                <path d="M50 33 Q53 35.4 56 33" stroke="#5b3a2c" strokeWidth="1.3" fill="none" strokeLinecap="round"/>
               </g>
             </g>
           </g>

@@ -37,8 +37,8 @@ input, textarea, [contenteditable] {
 
 @keyframes hedgehogBounce {
   0%,100% { transform: translateY(0)    rotate(0deg);   }
-  35%     { transform: translateY(-12px) rotate(-12deg); }
-  70%     { transform: translateY(-5px)  rotate(6deg);   }
+  40%     { transform: translateY(-8px) rotate(-5deg);  }
+  70%     { transform: translateY(-3px) rotate(3deg);   }
 }
 
 @keyframes dimFadeIn {

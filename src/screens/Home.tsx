@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useStages } from '../hooks/useStages'
 import { useProgress } from '../hooks/useProgress'
+import { useAccommodationContacts } from '../hooks/useAccommodationContacts'
 import CompletionCelebration from '../components/CompletionCelebration'
+import type { Stage } from '../lib/types'
 
 export default function Home() {
   const { stages, loading } = useStages()
   const { completedStages, currentStage, completedCount, allDone, toggleStage, markNextDone } = useProgress(stages)
+  const contacts = useAccommodationContacts()
   const navigate = useNavigate()
   const [celebrationDismissed, setCelebrationDismissed] = useState(false)
 
@@ -84,9 +87,12 @@ export default function Home() {
 
         {/* Stage list */}
         <ul className="divide-y divide-neutral-200">
-          {stages.map(stage => {
+          {stages.map((stage, idx) => {
             const done = completedStages.has(stage.stage)
             const isCurrent = currentStage?.stage === stage.stage
+            const nextStage = stages[idx + 1]
+            const contact = contacts.get(stage.stage)
+            const overnight = companionStaysOvernight(stage, nextStage)
 
             return (
               <li key={stage.stage} className="flex items-center bg-white">
@@ -119,6 +125,25 @@ export default function Home() {
                     <div className={`text-xs mt-0.5 ${done ? 'text-neutral-300' : 'text-neutral-500'}`}>
                       {stage.date} · {stage.length_km} km · +{stage.elevation_gain_m} m
                     </div>
+                    {(stage.accommodation_name || stage.companion) && (
+                      <div className={`flex items-center gap-2 text-xs mt-0.5 flex-wrap ${done ? 'text-neutral-300' : 'text-neutral-400'}`}>
+                        {stage.accommodation_name && (
+                          <span className="flex items-center gap-1">
+                            <span>🏠</span>
+                            <span className="truncate max-w-[120px]">{stage.accommodation_name}</span>
+                            {contact?.phone && <span title={contact.phone}>📞</span>}
+                          </span>
+                        )}
+                        {stage.accommodation_name && stage.companion && <span>·</span>}
+                        {stage.companion && (
+                          <span className="flex items-center gap-1">
+                            <span>👤</span>
+                            <span className="truncate max-w-[80px]">{formatCompanions(stage.companion)}</span>
+                            {overnight && <span title="Staying overnight">🌙</span>}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {isCurrent && (
@@ -164,4 +189,14 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-sm font-semibold text-neutral-800 mt-0.5">{value}</div>
     </div>
   )
+}
+
+function formatCompanions(raw: string): string {
+  return raw.split(',').map(s => s.trim()).filter(Boolean).join(' & ')
+}
+
+function companionStaysOvernight(stage: Stage, nextStage: Stage | undefined): boolean {
+  if (!stage.companion || !nextStage?.companion) return false
+  const current = new Set(stage.companion.split(',').map(s => s.trim()).filter(Boolean))
+  return nextStage.companion.split(',').some(c => current.has(c.trim()))
 }

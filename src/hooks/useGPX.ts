@@ -1,20 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { GpxPoint } from '../lib/types'
 import { getDB } from '../lib/db'
 
 export function useStageGPX(stageId: number) {
   const [trackPoints, setTrackPoints] = useState<GpxPoint[] | null>(null)
   const [loading, setLoading] = useState(true)
+  // Monotonic request id — guards against an older load resolving after a newer
+  // one when the user navigates stages quickly.
+  const reqId = useRef(0)
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const id = ++reqId.current
     setLoading(true)
     const db = await getDB()
     const data = await db.get('gpx', stageId)
+    if (id !== reqId.current) return // superseded by a newer load
     setTrackPoints(data?.trackPoints ?? null)
     setLoading(false)
-  }
+  }, [stageId])
 
-  useEffect(() => { load() }, [stageId])
+  useEffect(() => {
+    setTrackPoints(null) // drop the previous stage's route immediately — no stale flash
+    load()
+  }, [load])
 
   return { trackPoints, loading, reload: load }
 }

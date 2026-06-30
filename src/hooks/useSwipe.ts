@@ -5,6 +5,13 @@ export function useSwipe(onSwipeLeft: () => void, onSwipeRight: () => void) {
   const startY = useRef<number | null>(null)
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
+    // Don't start a navigation swipe inside interactive regions like the map —
+    // panning the map horizontally must not flip to the next stage.
+    if ((e.target as HTMLElement).closest?.('[data-no-swipe]')) {
+      startX.current = null
+      startY.current = null
+      return
+    }
     startX.current = e.touches[0].clientX
     startY.current = e.touches[0].clientY
   }, [])

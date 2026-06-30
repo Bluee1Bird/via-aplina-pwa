@@ -1,6 +1,7 @@
 import Papa from 'papaparse'
 import type { Stage } from './types'
 import { getDB } from './db'
+import { isUrl, fetchAccommodationContact } from './accommodations'
 
 const REQUIRED_COLUMNS = [
   'stage', 'date', 'length_km', 'elevation_gain_m', 'duration_h',
@@ -40,10 +41,19 @@ export async function parseAndStoreCSV(file: File): Promise<{ count: number }> {
 
         try {
           const db = await getDB()
-          const tx = db.transaction('stages', 'readwrite')
-          await tx.store.clear()
-          await Promise.all(stages.map(s => tx.store.put(s)))
+          const tx = db.transaction(['stages', 'accommodationContacts'], 'readwrite')
+          await tx.objectStore('stages').clear()
+          await tx.objectStore('accommodationContacts').clear()
+          await Promise.all(stages.map(s => tx.objectStore('stages').put(s)))
           await tx.done
+
+          // Fire-and-forget: fetch contact info for stages with URL-based accommodation links
+          for (const stage of stages) {
+            if (stage.accommodation_url && isUrl(stage.accommodation_url)) {
+              fetchAccommodationContact(stage.accommodation_url, stage.stage).catch(() => {})
+            }
+          }
+
           resolve({ count: stages.length })
         } catch (e) {
           reject(e)
