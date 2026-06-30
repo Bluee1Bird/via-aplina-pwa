@@ -37,7 +37,7 @@ interface Props {
 
 export default function CompletionCelebration({ onDismiss }: Props) {
   useEffect(() => {
-    // animateMotion: dur=2.2s, begin=0.5s → arrives at peak at ~2.7s
+    // animateMotion: dur=2.3s, begin=0.5s → reaches the summit at ~2.8s
     const burst1 = setTimeout(() => {
       void confetti({
         particleCount: 150,
@@ -46,12 +46,12 @@ export default function CompletionCelebration({ onDismiss }: Props) {
         colors: ['#22c55e', '#fbbf24', '#f97316', '#ec4899', '#3b82f6', '#a855f7'],
         startVelocity: 45,
       })
-    }, 2700)
+    }, 2800)
 
     const burst2 = setTimeout(() => {
       void confetti({ angle: 55,  particleCount: 80, spread: 65, origin: { x: 0,   y: 0.55 } })
       void confetti({ angle: 125, particleCount: 80, spread: 65, origin: { x: 1,   y: 0.55 } })
-    }, 3050)
+    }, 3150)
 
     return () => { clearTimeout(burst1); clearTimeout(burst2) }
   }, [])
@@ -91,10 +91,11 @@ export default function CompletionCelebration({ onDismiss }: Props) {
           style={{ display: 'block' }}
         >
           <defs>
-            {/* Path the hedgehog follows — up the right slope, then crests the
-                ridge so the final tangent is horizontal and it ends UPRIGHT on
-                the summit (rotate="auto" freezes at the last tangent angle). */}
-            <path id="climbPath" d="M 342 468 C 305 380 232 212 205 152 C 198 136 206 131 216 131"/>
+            {/* Path the hedgehog follows — up the LEFT slope toward the summit,
+                moving up-and-to-the-right. The hedgehog is drawn facing right, so
+                this is its direction of travel and it stays UPRIGHT the whole way
+                (no rotate="auto" — that's what tipped it onto its head before). */}
+            <path id="climbPath" d="M 91.5 377.5 Q 150 235 199.5 107.5"/>
             <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
               <stop offset="0%"   stopColor="#fef3c7" stopOpacity="0.5"/>
               <stop offset="100%" stopColor="#fef3c7" stopOpacity="0"/>
@@ -137,17 +138,20 @@ export default function CompletionCelebration({ onDismiss }: Props) {
           {/* Ground */}
           <rect x="-10" y="470" width="420" height="20" fill="#14532d"/>
 
-          {/* Hedgehog — outer g carries the animateMotion (SMIL),
-               inner g carries the CSS bounce so they don't conflict */}
+          {/* Hedgehog — nested groups keep the three motions from fighting over
+               the same transform:
+                 1. outer g  → animateMotion (SMIL) drives it up the slope, upright
+                 2. cheer g  → joyful hops once it reaches the summit
+                 3. waddle g → gentle step-bob during the climb */}
           <g>
-            <animateMotion dur="2.2s" begin="0.5s" fill="freeze" rotate="auto">
+            <animateMotion dur="2.3s" begin="0.5s" fill="freeze">
               <mpath href="#climbPath"/>
             </animateMotion>
 
-            {/* A few gentle happy hops when the climb ends */}
-            <g style={{ animation: 'hedgehogBounce 0.5s ease-in-out 2.75s 3' }}>
-              {/* Hedgehog, drawn facing right (+X = forward for rotate="auto") */}
-              <g transform="translate(-34, -28) scale(1.25)">
+            <g style={{ animation: 'summitCheer 0.8s ease-in-out 2.8s 2' }}>
+              <g style={{ animation: 'hedgehogWaddle 0.5s ease-in-out 0.5s 5' }}>
+                {/* Hedgehog, drawn facing right (+X = its direction of travel) */}
+                <g transform="translate(-34, -28) scale(1.25)">
                 {/* Soft contact shadow */}
                 <ellipse cx="24" cy="43" rx="20" ry="3" fill="#000" opacity="0.12"/>
 
@@ -188,6 +192,7 @@ export default function CompletionCelebration({ onDismiss }: Props) {
 
                 {/* Gentle smile */}
                 <path d="M50 33 Q53 35.4 56 33" stroke="#5b3a2c" strokeWidth="1.3" fill="none" strokeLinecap="round"/>
+                </g>
               </g>
             </g>
           </g>

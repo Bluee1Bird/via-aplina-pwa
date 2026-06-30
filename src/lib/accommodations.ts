@@ -90,21 +90,52 @@ export function parseGoogleMapsUrl(url: string): { name?: string; lat?: number; 
   return out
 }
 
-// Short links (maps.app.goo.gl) must be followed to reveal the real URL.
-// allorigins' /get returns the final redirected URL in `status.url`.
-async function resolveShortLink(url: string): Promise<{ finalUrl?: string; ogTitle?: string }> {
-  try {
-    const res = await withTimeout(fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`), 15000)
-    if (!res.ok) return {}
+// Short links (maps.app.goo.gl) carry no coordinates — they must be followed to
+// the full place page. Each proxy is flaky on its own (allorigins throws 522/408s;
+// codetabs/corsproxy have been 400/403-ing), so try several.
+//
+// IMPORTANT: allorigins reports the *requested* (short) URL in `status.url`, NOT
+// the redirect target, and the resolved Maps page has no og:url — so neither of
+// those gives us the expanded link. What DOES work: allorigins still fetches the
+// fully-resolved place page, whose HTML embeds the canonical `/maps/place/Name/…`
+// path and the pin's `!3d<lat>!4d<lon>`. parseGoogleMapsUrl's regexes match those
+// straight out of the page body, so we just run it over the HTML.
+const SHORTLINK_PROXIES: ((u: string) => Promise<{ html: string; finalUrl?: string }>)[] = [
+  async u => {
+    const res = await withTimeout(fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`), 15000)
+    if (!res.ok) throw new Error('allorigins')
     const data = await res.json() as { contents?: string; status?: { url?: string } }
-    const html = data.contents ?? ''
-    const ogUrl = html.match(/og:url["'][^>]*content=["']([^"']+)/i)?.[1]
-    const ogTitle = html.match(/og:title["'][^>]*content=["']([^"']+)/i)?.[1]
-    return {
-      finalUrl: data.status?.url || ogUrl,
-      ogTitle: ogTitle?.replace(/\s*[-·]\s*Google Maps.*$/i, '').trim() || undefined,
+    return { html: data.contents ?? '', finalUrl: data.status?.url }
+  },
+  async u => {
+    const res = await withTimeout(fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`), 15000)
+    if (!res.ok) throw new Error('codetabs')
+    return { html: await res.text() }
+  },
+  async u => {
+    const res = await withTimeout(fetch(`https://corsproxy.io/?url=${encodeURIComponent(u)}`), 15000)
+    if (!res.ok) throw new Error('corsproxy')
+    return { html: await res.text() }
+  },
+]
+
+async function resolveShortLink(url: string): Promise<{ name?: string; lat?: number; lon?: number }> {
+  for (const proxy of SHORTLINK_PROXIES) {
+    try {
+      const { html, finalUrl } = await proxy(url)
+      // If a proxy did expose the expanded URL, parse that (cleanest).
+      if (finalUrl && !isShortGoogleLink(finalUrl)) {
+        const fromUrl = parseGoogleMapsUrl(finalUrl)
+        if (fromUrl.lat !== undefined) return fromUrl
+      }
+      // Otherwise mine name + pin coords from the resolved page body itself.
+      const fromHtml = parseGoogleMapsUrl(html)
+      if (fromHtml.lat !== undefined) return fromHtml
+    } catch {
+      // try next proxy
     }
-  } catch { return {} }
+  }
+  return {}
 }
 
 function dist2(aLat: number, aLon: number, bLat: number, bLon: number): number {
@@ -169,14 +200,11 @@ export async function fetchAccommodationPlace(url: string, stageId: number): Pro
     return contact
   }
 
-  let parseTarget = url
-  if (isShortGoogleLink(url)) {
-    const { finalUrl, ogTitle } = await resolveShortLink(url)
-    if (finalUrl) { parseTarget = finalUrl; contact.mapsUrl = finalUrl }
-    if (ogTitle) contact.placeName = ogTitle
-  }
-
-  const parsed = parseGoogleMapsUrl(parseTarget)
+  // Full URLs carry coords inline; short links must be followed (via proxy) to
+  // the resolved page, where parseGoogleMapsUrl mines the same fields from the body.
+  const parsed = isShortGoogleLink(url)
+    ? await resolveShortLink(url)
+    : parseGoogleMapsUrl(url)
   if (parsed.name && !contact.placeName) contact.placeName = parsed.name
   if (parsed.lat !== undefined) { contact.lat = parsed.lat; contact.lon = parsed.lon }
   if (!contact.placeName && contact.lat === undefined) contact.fetchError = 'could not read link'

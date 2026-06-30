@@ -45,7 +45,8 @@ export default function Home() {
 
   const totalKm = stages.reduce((s, st) => s + st.length_km, 0)
   const totalGain = stages.reduce((s, st) => s + st.elevation_gain_m, 0)
-  const remaining = stages.length - completedCount
+  const doneKm = stages.reduce((s, st) => completedStages.has(st.stage) ? s + st.length_km : s, 0)
+  const doneGain = stages.reduce((s, st) => completedStages.has(st.stage) ? s + st.elevation_gain_m : s, 0)
 
   return (
     <div className="flex flex-col min-h-screen bg-neutral-50">
@@ -77,11 +78,10 @@ export default function Home() {
             />
           </div>
 
-          {/* Stats */}
+          {/* Stats — progress so far vs. the whole route */}
           <div className="mt-4 flex gap-3">
-            <Stat label="Total km" value={`${totalKm.toFixed(0)} km`} />
-            <Stat label="Total gain" value={`+${totalGain.toLocaleString()} m`} />
-            <Stat label="Remaining" value={`${remaining} days`} />
+            <Stat label="Distance" value={`${doneKm.toFixed(0)} / ${totalKm.toFixed(0)} km`} />
+            <Stat label="Elevation" value={`${doneGain.toLocaleString()} / ${totalGain.toLocaleString()} m`} />
           </div>
         </div>
 
