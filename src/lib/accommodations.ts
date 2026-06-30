@@ -92,20 +92,27 @@ export function parseGoogleMapsUrl(url: string): { name?: string; lat?: number; 
 
 // Short links (maps.app.goo.gl) carry no coordinates — they must be followed to
 // the full place page. Each proxy is flaky on its own (allorigins throws 522/408s;
-// codetabs/corsproxy have been 400/403-ing), so try several.
+// codetabs/corsproxy have been 400/403-ing), so try several — AND retry.
 //
 // IMPORTANT: allorigins reports the *requested* (short) URL in `status.url`, NOT
 // the redirect target, and the resolved Maps page has no og:url — so neither of
 // those gives us the expanded link. What DOES work: allorigins still fetches the
 // fully-resolved place page, whose HTML embeds the canonical `/maps/place/Name/…`
 // path and the pin's `!3d<lat>!4d<lon>`. parseGoogleMapsUrl's regexes match those
-// straight out of the page body, so we just run it over the HTML.
+// straight out of the page body, so we just run it over the HTML. (Verified
+// empirically: allorigins/get often 522s on the FIRST hit then succeeds on a
+// retry — so a single-pass chain spuriously fails. Hence the retry rounds below.)
 const SHORTLINK_PROXIES: ((u: string) => Promise<{ html: string; finalUrl?: string }>)[] = [
   async u => {
     const res = await withTimeout(fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`), 15000)
-    if (!res.ok) throw new Error('allorigins')
+    if (!res.ok) throw new Error('allorigins/get')
     const data = await res.json() as { contents?: string; status?: { url?: string } }
     return { html: data.contents ?? '', finalUrl: data.status?.url }
+  },
+  async u => {
+    const res = await withTimeout(fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`), 15000)
+    if (!res.ok) throw new Error('allorigins/raw')
+    return { html: await res.text() }
   },
   async u => {
     const res = await withTimeout(fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`), 15000)
@@ -119,21 +126,30 @@ const SHORTLINK_PROXIES: ((u: string) => Promise<{ html: string; finalUrl?: stri
   },
 ]
 
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
 async function resolveShortLink(url: string): Promise<{ name?: string; lat?: number; lon?: number }> {
-  for (const proxy of SHORTLINK_PROXIES) {
-    try {
-      const { html, finalUrl } = await proxy(url)
-      // If a proxy did expose the expanded URL, parse that (cleanest).
-      if (finalUrl && !isShortGoogleLink(finalUrl)) {
-        const fromUrl = parseGoogleMapsUrl(finalUrl)
-        if (fromUrl.lat !== undefined) return fromUrl
+  // The proxies (esp. allorigins) are transiently flaky — a 522/408/429 on one
+  // attempt usually clears on the next. Sweep the whole chain several times with
+  // a short backoff rather than giving up after one failed pass.
+  const ROUNDS = 4
+  for (let round = 0; round < ROUNDS; round++) {
+    for (const proxy of SHORTLINK_PROXIES) {
+      try {
+        const { html, finalUrl } = await proxy(url)
+        // If a proxy did expose the expanded URL, parse that (cleanest).
+        if (finalUrl && !isShortGoogleLink(finalUrl)) {
+          const fromUrl = parseGoogleMapsUrl(finalUrl)
+          if (fromUrl.lat !== undefined) return fromUrl
+        }
+        // Otherwise mine name + pin coords from the resolved page body itself.
+        const fromHtml = parseGoogleMapsUrl(html)
+        if (fromHtml.lat !== undefined) return fromHtml
+      } catch {
+        // try next proxy
       }
-      // Otherwise mine name + pin coords from the resolved page body itself.
-      const fromHtml = parseGoogleMapsUrl(html)
-      if (fromHtml.lat !== undefined) return fromHtml
-    } catch {
-      // try next proxy
     }
+    if (round < ROUNDS - 1) await sleep(800 * (round + 1)) // 0.8s, 1.6s, 2.4s backoff
   }
   return {}
 }
