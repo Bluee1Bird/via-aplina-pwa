@@ -19,6 +19,8 @@ npx tsc --noEmit  # type-check only
 ### Data flow
 User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedDB `stages` store → screens read via hooks. GPX upload → `src/lib/gpx.ts` (DOMParser, no lib) → `gpx` store. Progress is a singleton array of completed stage IDs in the `progress` store.
 
+**Import formats — CSV/TXT *and* Excel.** `csv.ts` has one shared back-end `storeStageRows(rows, fields)` (validate required columns → map `Stage[]` → replace store → kick off accommodation resolution); the two front-ends only differ in how they produce rows: `parseAndStoreCSV` (papaparse) and `parseAndStoreSpreadsheet` (SheetJS/`xlsx`, first worksheet). Settings routes by extension (`.xlsx?` → spreadsheet, else CSV). **SheetJS is `import()`-lazy-loaded** — it's a 141 KB-gzip chunk that must not touch the initial bundle or the CSV path (it loads only when an Excel file is actually picked; still precached by the SW so Excel import works offline). Excel date cells are read with `cellDates:true`/`raw:true` and collapsed to `yyyy-mm-dd` via `isoDate()` using **UTC components** (a date-only cell is UTC-midnight; local formatting would shift the day). `xlsx` is the npm registry build `0.18.5`, which carries a high-severity advisory (prototype pollution / ReDoS) that only triggers on a *maliciously crafted* spreadsheet — acceptable here since the user imports their own export. The patched build ships **only via SheetJS's CDN** (not npm); to upgrade: `npm i https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`.
+
 ### IndexedDB schema (`src/lib/db.ts`, `idb` library) — **DB version 5**
 | Store | Key | Value |
 |---|---|---|

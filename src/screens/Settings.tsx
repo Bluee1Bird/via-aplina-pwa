@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { parseAndStoreCSV } from '../lib/csv'
+import { parseAndStoreCSV, parseAndStoreSpreadsheet } from '../lib/csv'
 import { parseAndStoreStageGPX } from '../lib/gpx'
 import { useStages } from '../hooks/useStages'
 import { useGPXStatus } from '../hooks/useGPX'
@@ -23,7 +23,8 @@ export default function Settings() {
     setCsvUploading(true)
     setCsvStatus(null)
     try {
-      const { count } = await parseAndStoreCSV(file)
+      const isExcel = /\.xlsx?$/i.test(file.name)
+      const { count } = isExcel ? await parseAndStoreSpreadsheet(file) : await parseAndStoreCSV(file)
       await reloadStages()
       setCsvStatus({ type: 'success', message: `${count} stages loaded.` })
     } catch (err) {
@@ -90,11 +91,12 @@ export default function Settings() {
 
         {/* CSV upload */}
         <UploadCard
-          title="Stage Data (CSV)"
+          title="Stage Data (CSV / Excel)"
           statusLine={stages.length > 0 ? `${stages.length} stages loaded` : 'No data loaded yet'}
           hint={
             <>
-              Required: stage, date, length_km, elevation_gain_m, duration_h, start, finish,
+              CSV, TXT or Excel (.xls/.xlsx) — first sheet, header row required.
+              Columns: stage, date, length_km, elevation_gain_m, duration_h, start, finish,
               accommodation_name, accommodation_url, companion, waypoint_start, waypoint_finish.{' '}
               <span className="text-neutral-500">Optional: lat, lon (enables weather).</span>
             </>
@@ -107,7 +109,7 @@ export default function Settings() {
         {/* accept lists both extensions AND MIME types: iOS Files resolves `accept`
             to UTIs, where bare `.csv` (→ public.comma-separated-values-text) greys
             out `.txt` files. Adding text/plain + .txt makes both selectable. */}
-        <input ref={csvInputRef} type="file" accept=".csv,.txt,text/csv,text/plain,text/comma-separated-values" className="hidden" onChange={handleCSVChange} />
+        <input ref={csvInputRef} type="file" accept=".csv,.txt,.xls,.xlsx,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={handleCSVChange} />
 
         {/* GPX upload — multi-file */}
         <UploadCard
