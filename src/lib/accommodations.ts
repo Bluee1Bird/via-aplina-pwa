@@ -46,6 +46,159 @@ async function tryFetch(url: string): Promise<string | null> {
   return null
 }
 
+// ───────────────────────── Google Maps place links ─────────────────────────
+
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+]
+
+const GMAPS_RE = /^https?:\/\/(www\.)?(google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl\/maps)/i
+
+export function isGoogleMapsUrl(url: string): boolean {
+  return GMAPS_RE.test(url.trim())
+}
+
+function isShortGoogleLink(url: string): boolean {
+  return /(maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(url)
+}
+
+// Pull place name + pin coordinates straight out of a full Maps URL (no network).
+export function parseGoogleMapsUrl(url: string): { name?: string; lat?: number; lon?: number } {
+  const out: { name?: string; lat?: number; lon?: number } = {}
+  try {
+    const pm = url.match(/\/maps\/place\/([^/@]+)/i)
+    if (pm) {
+      const raw = decodeURIComponent(pm[1].replace(/\+/g, ' ')).trim()
+      if (raw && !/^[-\d.,\s]+$/.test(raw)) out.name = raw
+    }
+    const data = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) // the actual place pin
+    if (data) { out.lat = parseFloat(data[1]); out.lon = parseFloat(data[2]) }
+    if (out.lat === undefined) {
+      const at = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/)
+      if (at) { out.lat = parseFloat(at[1]); out.lon = parseFloat(at[2]) }
+    }
+    if (out.lat === undefined) {
+      const u = new URL(url)
+      const q = u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('ll') || ''
+      const m = q.match(/(-?\d+\.\d+),\s*(-?\d+\.\d+)/)
+      if (m) { out.lat = parseFloat(m[1]); out.lon = parseFloat(m[2]) }
+      else if (q && !out.name && /[a-z]/i.test(q)) out.name = q
+    }
+  } catch { /* ignore */ }
+  return out
+}
+
+// Short links (maps.app.goo.gl) must be followed to reveal the real URL.
+// allorigins' /get returns the final redirected URL in `status.url`.
+async function resolveShortLink(url: string): Promise<{ finalUrl?: string; ogTitle?: string }> {
+  try {
+    const res = await withTimeout(fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`), 15000)
+    if (!res.ok) return {}
+    const data = await res.json() as { contents?: string; status?: { url?: string } }
+    const html = data.contents ?? ''
+    const ogUrl = html.match(/og:url["'][^>]*content=["']([^"']+)/i)?.[1]
+    const ogTitle = html.match(/og:title["'][^>]*content=["']([^"']+)/i)?.[1]
+    return {
+      finalUrl: data.status?.url || ogUrl,
+      ogTitle: ogTitle?.replace(/\s*[-·]\s*Google Maps.*$/i, '').trim() || undefined,
+    }
+  } catch { return {} }
+}
+
+function dist2(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const dx = aLat - bLat, dy = aLon - bLon
+  return dx * dx + dy * dy
+}
+
+// Best-effort phone/website/stars/address from OpenStreetMap near the pin.
+async function enrichFromOSM(lat: number, lon: number): Promise<Partial<AccommodationContact>> {
+  const query =
+    `[out:json][timeout:20];` +
+    `nwr["tourism"~"^(hotel|guest_house|hostel|chalet|motel|apartment|alpine_hut|wilderness_hut)$"](around:220,${lat},${lon});` +
+    `out tags center 20;`
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12000)
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
+      })
+      if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) continue
+      const data = await res.json() as {
+        elements?: Array<{ lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }>
+      }
+      const nodes = (data.elements ?? []).filter(e => e.tags)
+      if (!nodes.length) return {}
+      nodes.sort((a, b) => {
+        const ac = a.center ?? { lat: a.lat!, lon: a.lon! }
+        const bc = b.center ?? { lat: b.lat!, lon: b.lon! }
+        return dist2(lat, lon, ac.lat, ac.lon) - dist2(lat, lon, bc.lat, bc.lon)
+      })
+      const t = nodes[0].tags!
+      const result: Partial<AccommodationContact> = {}
+      if (t.name) result.placeName = t.name
+      const phone = t.phone || t['contact:phone'] || t['contact:mobile']
+      if (phone) result.phone = phone
+      const website = t.website || t['contact:website'] || t.url
+      if (website) result.website = website
+      if (t.stars) result.stars = t.stars
+      const addr = [t['addr:street'], t['addr:housenumber'], t['addr:postcode'], t['addr:city']].filter(Boolean).join(' ')
+      if (addr) result.address = addr
+      return result
+    } catch {
+      // try next mirror
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return {}
+}
+
+// Resolve a Google Maps accommodation link → name + coords (+ OSM phone/website/
+// stars). Called once per stage at CSV-upload time and cached forever.
+export async function fetchAccommodationPlace(url: string, stageId: number): Promise<AccommodationContact> {
+  const contact: AccommodationContact = { fetchedAt: Date.now(), source: 'google', mapsUrl: url }
+  if (!isGoogleMapsUrl(url)) {
+    contact.fetchError = 'not a Google Maps link'
+    await cacheContact(stageId, contact)
+    return contact
+  }
+
+  let parseTarget = url
+  if (isShortGoogleLink(url)) {
+    const { finalUrl, ogTitle } = await resolveShortLink(url)
+    if (finalUrl) { parseTarget = finalUrl; contact.mapsUrl = finalUrl }
+    if (ogTitle) contact.placeName = ogTitle
+  }
+
+  const parsed = parseGoogleMapsUrl(parseTarget)
+  if (parsed.name && !contact.placeName) contact.placeName = parsed.name
+  if (parsed.lat !== undefined) { contact.lat = parsed.lat; contact.lon = parsed.lon }
+  if (!contact.placeName && contact.lat === undefined) contact.fetchError = 'could not read link'
+
+  // Cache immediately so the name + "Open in Google Maps" appear without waiting
+  // on Overpass (which can be slow); then enrich and re-cache.
+  await cacheContact(stageId, contact)
+
+  if (contact.lat !== undefined && contact.lon !== undefined) {
+    const osm = await enrichFromOSM(contact.lat, contact.lon)
+    if (osm.placeName && !contact.placeName) contact.placeName = osm.placeName
+    if (osm.phone) contact.phone = osm.phone
+    if (osm.website) contact.website = osm.website
+    if (osm.stars) contact.stars = osm.stars
+    if (osm.address) contact.address = osm.address
+    if (osm.phone || osm.website || osm.stars || osm.address || osm.placeName) {
+      await cacheContact(stageId, contact)
+    }
+  }
+  return contact
+}
+
 function parseContactFromHtml(html: string): Partial<AccommodationContact> {
   const result: Partial<AccommodationContact> = {}
 

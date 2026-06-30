@@ -61,6 +61,11 @@ export interface AccommodationContact {
   phone?: string
   website?: string
   address?: string
+  lat?: number
+  lon?: number
+  stars?: string        // OSM hotel star classification (e.g. "3"), not a user rating
+  mapsUrl?: string      // canonical/resolved Google Maps URL to open
+  source?: 'google' | 'web'
   fetchedAt: number
   fetchError?: string
 }

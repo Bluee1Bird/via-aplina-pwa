@@ -27,6 +27,7 @@ input, textarea, [contenteditable] {
 }
 
 #root {
+  min-height: 100vh;   /* fallback for WebKit/browsers without svh */
   min-height: 100svh;
 }
 

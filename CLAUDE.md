@@ -19,13 +19,16 @@ npx tsc --noEmit  # type-check only
 ### Data flow
 User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedDB `stages` store → screens read via hooks. GPX upload → `src/lib/gpx.ts` (DOMParser, no lib) → `gpx` store. Progress is a singleton array of completed stage IDs in the `progress` store.
 
-### IndexedDB schema (`src/lib/db.ts`, `idb` library) — DB version 2
+### IndexedDB schema (`src/lib/db.ts`, `idb` library) — **DB version 5**
 | Store | Key | Value |
 |---|---|---|
 | `stages` | `stage` (int) | `Stage` CSV row |
 | `progress` | `1` (singleton) | `{ completedStages: number[] }` |
-| `weather` | `stageId` (int) | `WeatherCache` (15-min TTL) |
-| `gpx` | `1` (singleton) | `GpxData` (waypoints + trackPoints) |
+| `weather` | `key` (string `"N-start-<date>"` / `"N-finish-<date>"`) | `WeatherCache` (15-min TTL) |
+| `gpx` | `stageNumber` (int) | `StageGpxData` (`trackPoints`) — **per-stage**, not a singleton |
+| `accommodationContacts` | `stageId` (int) | `AccommodationContactCache` |
+
+Upgrade history lives in `getDB()`'s `upgrade()`: v2 added `gpx`, v3 cleared it, v4 re-keyed `weather` from numeric `stageId` to string `key`, v5 added `accommodationContacts`. Bump the version + add an `if (oldVersion < N)` block for any new store/key change.
 
 ### Routing
 `HashRouter`. Three routes: `/`, `/stage/:stageId`, `/settings`.
@@ -33,10 +36,11 @@ User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedD
 ### Key hooks (`src/hooks/`)
 - `useStages` — all stages from DB, sorted by stage number
 - `useProgress(stages)` — `completedStages: Set<number>`, `currentStage` (next uncompleted, sequential), `toggleStage(id)` (done↔undone), `markNextDone()` (used by Home button)
-- `useGPX` — reads `GpxData` from DB
+- `useStageGPX(stageId)` — per-stage `trackPoints` from the `gpx` store (race-guarded, clears on stage change); `useGPXStatus` lists which stages have GPX
 - `useCompanion(stage, allStages)` — consecutive stages with same companion → `{ name, dayIndex, totalDays }`; accepts `Stage | undefined`
-- `useWeather(stageId, lat?, lon?)` — Open-Meteo fetch + 15-min DB cache; skips if no coordinates
-- `useSwipe(onLeft, onRight)` — touchstart/touchend, fires if horizontal delta > 50px
+- `useLocationWeather(cacheKey, lat?, lon?, isoDate?)` — Open-Meteo forecast **for `isoDate`** + 15-min DB cache; returns `tooFar` when the date is beyond the ~16-day horizon; skips if no coords/date
+- `useAccommodationContacts()` — `Map<stageId, AccommodationContact>` from the cache, debounced refresh on update event
+- `useSwipe(onLeft, onRight)` — touchstart/touchend, fires if horizontal delta > 50px; ignores touches starting inside `[data-no-swipe]`
 
 ### Screens
 - **Home** — progress bar, stats, stage list (circle tappable to toggle done), "Mark today as done" button
@@ -44,18 +48,22 @@ User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedD
 - **Settings** — CSV upload + GPX upload (both live)
 
 ### GPX (`src/lib/gpx.ts`)
-- Parsed with `DOMParser` — no external library
-- `sliceTrackForStage(gpx, waypointStart, waypointFinish)` finds waypoints by name (exact then fuzzy), snaps to closest track point, slices the array
-- Falls back to full track if waypoints don't match
+- Parsed with `DOMParser` — no external library. **One GPX file per stage**, keyed by stage number.
+- Stage number is read from `#N` in the GPX `metadata > name` or the filename (`parseAndStoreStageGPX(file, stageOverride?)`). Multi-file upload in Settings; single-file "Upload/Replace GPX" per stage in DayCard.
+- Only `trackPoints` are stored (`StageGpxData`); weather uses the first/last point.
 
 ### Map (`src/components/StageMap.tsx`)
 - Leaflet + react-leaflet, **lazy-loaded** (`lazy()` + `Suspense`) so Leaflet CSS doesn't block initial render
-- Uses `CircleMarker` (no default icon path issues with Vite)
-- OSM tiles; zoom auto-calculated from track span
-- Shown in DayCard only when GPX is loaded and waypoints are set
+- Uses `CircleMarker` (no default icon path issues with Vite); `FitBounds` fits the view to the track (replaced manual zoom calc)
+- OSM or OpenTopoMap tiles (Topo layer toggle); shown in DayCard whenever the stage has GPX `trackPoints`
+- See the **Map resize**, **Map performance**, and **POI overlays** sections below for the important gotchas
 
 ### Weather
-Open-Meteo `/v1/forecast` (no API key). Requires `lat`/`lon` on the `Stage` object — **optional CSV columns**. Weather block hidden if absent.
+Open-Meteo `/v1/forecast` (no API key). Coordinates come from the stage's GPX start/finish points (falling back to CSV `lat`/`lon` for the finish). Weather block hidden if no coordinates.
+- Forecast is for the **stage's planned date** (`start_date=end_date=stage.date`), **not** today.
+- Open-Meteo's free forecast horizon is ~16 days. If the stage date is further out, `fetchLocationWeather` returns `{ tooFar: true }` without hitting the API and the widget shows a "check back within ~16 days" note.
+- Cache key includes the date (`N-start-<date>`) so editing the CSV date invalidates the cached forecast.
+- **Model selection (`modelParam`):** within ≤5 days of the hike it pins **`models=meteoswiss_icon_ch2`** (MeteoSwiss ~2 km, terrain-tuned for the Alps); beyond that it uses `best_match` (which already prefers MeteoSwiss ICON-CH near-term in CH but extends to 16 days with global models). Pinning the Swiss model further out returns `null` — it only forecasts ~5 days (`icon_ch1` ~1 km is even shorter, ~1.5 days). This serves MeteoSwiss's *raw model* data; their official post-processed forecasts/warnings/nowcasting are not available via Open-Meteo.
 
 ### CSV schema (current real data)
 ```
@@ -71,7 +79,66 @@ Optional: `lat`, `lon` (float) — enables weather per stage.
 - `accommodation_url` is often empty — rendered as plain text when absent
 - No `lat`/`lon` columns yet — weather section not visible until user adds them
 
-## What's next (planned)
-- GPX file: user will provide it — need to test waypoint name matching against `start`/`finish` values (e.g. "Vaduz", "Weisstannen", "Elm", "Leglerhütte")
-- Adding `lat`/`lon` to CSV for weather support
-- Possibly drop redundant `waypoint_start`/`waypoint_finish` columns from CSV (they duplicate `start`/`finish`)
+## Deployment — GitHub Pages (primary target: install as a PWA on iPhone/Android)
+
+- `vite.config.ts` sets **`base: '/via-aplina-pwa/'`** (the repo name) because Pages serves project sites under that sub-path. Every asset/manifest/SW path must stay under it. If the repo is ever renamed, update `base`, `manifest.scope`, and `manifest.start_url` together.
+- `index.html` uses `%BASE_URL%` for icon hrefs so they pick up the base.
+- `.github/workflows/deploy.yml` builds and publishes on every push to `main` (needs repo Settings → Pages → Source = "GitHub Actions").
+- **HashRouter is essential here** — routes live in the URL hash, so no SPA 404-fallback / server rewrites are needed on Pages.
+- Icons: PNGs in `public/` (`apple-touch-icon.png` 180, `pwa-192.png`, `pwa-512.png` + maskable). iOS **ignores SVG** for the home-screen icon, hence the PNGs + `<link rel="apple-touch-icon">`. Regenerate by rendering an SVG to PNG with headless Chrome (no image lib needed).
+- **Private repo caveat:** Pages from a *private* repo needs a paid plan. On free, the repo must be **public** to publish. No accidental bills: free accounts default to a **$0 spending limit**, and public-repo Actions are free/unlimited. The owner can distribute by temporarily making the repo public (install window), then private again — already-installed PWAs keep working offline from their service-worker cache; only *new* installs/updates need the site up.
+
+## Cross-platform / PWA compatibility (iOS Safari + Android Chrome)
+
+The two install targets use different engines (WebKit vs Blink). Verified gotchas / rules:
+- **No `AbortSignal.timeout()`** — iOS Safari 16+ only. Use `AbortController` + `setTimeout` (see `fetchOverpassPOIs`).
+- **CSS viewport units need fallbacks** — `min-height: 100svh` must be preceded by `100vh` for older WebKit.
+- **Safe areas** — fixed bottom bars use the `.safe-area-bottom` utility (`env(safe-area-inset-bottom)`); headers use `pt-12` so content clears the iOS status bar with `apple-mobile-web-app-status-bar-style: black-translucent` + `viewport-fit=cover`.
+- **Drag must use Pointer Events + `setPointerCapture`** (works on touch; see below). SMIL (`<animateMotion>`) and CSS transforms on SVG work in both engines.
+- IndexedDB, service workers, `flatMap`, optional chaining all fine on both. iOS *can* evict IndexedDB/PWA cache under storage pressure or long disuse — data is per-device, no sync.
+- Testing: a headless-Chrome harness (Playwright `playwright-core` + the system Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`) drives the real app (upload fixtures → exercise map/overlays/nav/celebration). WebKit testing needs `npx playwright install webkit` (was blocked by a CDN-DNS restriction in one environment — fall back to static audit there).
+
+## Map resize — TWO bugs, both fixed (don't regress)
+
+1. **`react-leaflet`'s `<MapContainer>` ignores its `style` prop after mount.** Changing the `height` prop does nothing. Fix: size a **wrapper `<div style={{height}}>`** and give `MapContainer` `style={{height:'100%'}}`, plus a child that calls `useMap().invalidateSize(false)` on height change.
+2. **Touch.** The old full-screen-overlay drag approach only worked for mouse (touch events stay bound to their `touchstart` target). Fix: `onPointerDown` → `setPointerCapture(e.pointerId)`, then `onPointerMove`/`onPointerUp` on the handle, `touchAction:'none'`. The drag is rAF-coalesced in DayCard so a heavy map re-renders once per frame.
+
+See `memory/feedback_map_resize.md` for the full write-up.
+
+## Map performance (StageMap)
+
+Real GPX tracks have thousands of points; naive rendering janks badly on resize. Rules:
+- `positions`, center/start/finish, and POI markers are **`useMemo`-ized** (stable refs → Leaflet doesn't redraw the polyline / markers every render).
+- Long tracks are **decimated** (`decimate(points, 1500)`, keeps endpoints) before becoming the polyline; `Polyline smoothFactor={2}`.
+- `<StageMap key={stageNum} …>` — remounted per stage so overlay/POI state can't bleed between stages.
+- `useStageGPX` clears `trackPoints` on stage change and has a request-id race guard (no stale-route flash).
+
+## POI overlays (ATM / Shops / Transit)
+
+- Overpass via 3 mirrors (`overpass-api.de`, `kumi.systems`, `maps.mail.ru`) with fallback; `AbortController` timeout.
+- Per-chip **loading spinner + result count + colour swatch matching the marker colour**. `pois[type]` is `null` = not loaded (re-toggle retries on failure), `[]` = loaded/none-found (shows "none found").
+- Swipe-to-navigate is disabled inside the map via a `[data-no-swipe]` region (so panning the map doesn't flip stages).
+
+## Accommodation place info + Google Maps data-source findings
+
+- Fetched **once at CSV-upload time** (`csv.ts` fires `fetchAccommodationContact` per stage with a URL) and cached in `accommodationContacts`. **Never re-fetched except on a new CSV upload** — this is a deliberate product rule; do NOT add retry-on-view.
+- `useAccommodationContacts` reads the cache and refreshes (debounced) on the `accommodationContactsUpdated` event. Generic-site scraping (`parseContactFromHtml`) reads JSON-LD / `tel:` / OG tags via a 3-proxy CORS chain (allorigins → codetabs → corsproxy).
+### Google Maps accommodation links (IMPLEMENTED — `fetchAccommodationPlace`)
+`csv.ts` routes `accommodation_url`s: Google Maps links → `fetchAccommodationPlace`, other URLs → the generic `fetchAccommodationContact`. The Maps path:
+1. `parseGoogleMapsUrl` extracts **name + pin coords** straight from the URL (`!3d<lat>!4d<lon>`, then `@lat,lng`, then `?q=`). Reliable, no network.
+2. Short links (`maps.app.goo.gl` / `goo.gl/maps`) are resolved first via allorigins `/get` (`status.url` = final redirected URL).
+3. **Caches name+coords immediately**, then enriches **phone / website / star-class / address from OpenStreetMap** (`enrichFromOSM`, Overpass `tourism=hotel|guest_house|…` within 220 m, nearest match) and re-caches. Verified: a real place yields phone, website, 5-star class, address.
+4. DayCard shows name, an OSM **star-class** badge (labelled "N-star", NOT a Google user rating), phone (`tel:`), website, address, and an **Open in Google Maps** button.
+
+**Why not Google ratings/phone directly:** scraping a Maps *place* page client-side is NOT reliable — Google serves consent/interstitial pages to datacenter proxies and the data is JS-rendered/obfuscated. The Places API would work but needs an API key + billing (rejected per free/no-backend constraint). Confirmed empirically.
+
+**⚠️ CSV gotcha — Google Maps URLs contain commas.** A *full* `/maps/place/...@lat,lng,zoom...` URL has commas, so in a CSV the `accommodation_url` field **must be quoted** (`"https://…"`) or papaparse splits it mid-value AND shifts every later column (companion/waypoints/lat/lon get corrupted). **Short links (`maps.app.goo.gl/...`) have no commas and are safe** — recommend those (the Google Maps app "Share → Copy link" produces them).
+
+## Hedgehog celebration (`CompletionCelebration.tsx`)
+
+- Night mountain scene; hedgehog climbs the right slope via SMIL `<animateMotion>` along `#climbPath`, which **crests the ridge so the final tangent is horizontal** → it ends standing upright on the summit (`rotate="auto"` freezes at the last tangent). Confetti fires *after* it arrives.
+- Hedgehog is drawn facing right (+X = forward); spines are data-driven triangle paths (`SPINES_BACK`/`SPINES_FRONT` + `spinePath`). Style brief: cute but **not too cartoonish** — no flag, no floating hearts, modest eye with one catchlight.
+
+## What's next / open
+- Short-link (`maps.app.goo.gl`) resolution is implemented but only validated against a *fake* code (real full URLs are fully validated). Worth confirming with a real share link.
+- Possibly drop redundant `waypoint_start`/`waypoint_finish` CSV columns (they duplicate `start`/`finish`).

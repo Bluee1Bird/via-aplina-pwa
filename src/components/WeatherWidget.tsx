@@ -3,16 +3,23 @@ import { weatherIcon, weatherLabel } from '../lib/weather'
 
 interface Props {
   label: string
+  forDate?: string // ISO date the forecast is for
   day: WeatherDay | null
   loading: boolean
   error: string | null
   fetchedAt: number | null
   stale: boolean
+  tooFar?: boolean
   collapsed: boolean
   onToggle: () => void
 }
 
-export default function WeatherWidget({ label, day, loading, error, fetchedAt, stale, collapsed, onToggle }: Props) {
+function shortDate(iso?: string): string {
+  if (!iso) return ''
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+export default function WeatherWidget({ label, forDate, day, loading, error, fetchedAt, stale, tooFar, collapsed, onToggle }: Props) {
   const minAgo = fetchedAt ? Math.round((Date.now() - fetchedAt) / 60000) : null
 
   return (
@@ -21,7 +28,10 @@ export default function WeatherWidget({ label, day, loading, error, fetchedAt, s
         onClick={onToggle}
         className="w-full px-3 py-2.5 flex items-center justify-between gap-1"
       >
-        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400 truncate">{label}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400 truncate">
+          {label}
+          {forDate && <span className="font-normal normal-case tracking-normal text-neutral-300"> · {shortDate(forDate)}</span>}
+        </span>
         <svg
           className={`w-3.5 h-3.5 text-neutral-400 shrink-0 transition-transform duration-200 ${collapsed ? '' : 'rotate-180'}`}
           fill="none" stroke="currentColor" viewBox="0 0 24 24"
@@ -32,13 +42,18 @@ export default function WeatherWidget({ label, day, loading, error, fetchedAt, s
 
       {!collapsed && (
         <div className="px-3 pb-3 border-t border-neutral-100">
-          {loading && !day && (
+          {tooFar && (
+            <p className="text-xs text-neutral-400 py-2 leading-snug">
+              📅 Forecast not available yet — check back within ~16 days of {shortDate(forDate)}.
+            </p>
+          )}
+          {!tooFar && loading && !day && (
             <p className="text-xs text-neutral-400 py-2">Fetching…</p>
           )}
-          {error && !day && (
+          {!tooFar && error && !day && (
             <p className="text-xs text-red-500 py-2 leading-snug">{error}</p>
           )}
-          {day && (
+          {!tooFar && day && (
             <div className="pt-2.5">
               <div className="flex items-center gap-2">
                 <span className="text-3xl leading-none">{weatherIcon(day.weathercode)}</span>

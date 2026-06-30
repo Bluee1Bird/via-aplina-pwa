@@ -8,7 +8,7 @@ import { useLocationWeather } from '../hooks/useWeather'
 import { useStageGPX } from '../hooks/useGPX'
 import { useAccommodationContacts } from '../hooks/useAccommodationContacts'
 import { parseAndStoreStageGPX } from '../lib/gpx'
-import { isUrl, fetchAccommodationContact } from '../lib/accommodations'
+import { isUrl, isGoogleMapsUrl } from '../lib/accommodations'
 import WeatherWidget from '../components/WeatherWidget'
 
 const StageMap = lazy(() => import('../components/StageMap'))
@@ -37,6 +37,9 @@ export default function DayCard() {
   const companion = useCompanion(stage, stages)
   const contacts = useAccommodationContacts()
   const contact = stage ? contacts.get(stage.stage) : undefined
+  // Link to open the place externally (resolved Maps URL preferred, else the raw CSV URL)
+  const accLink = contact?.mapsUrl ?? (stage?.accommodation_url && isUrl(stage.accommodation_url) ? stage.accommodation_url : undefined)
+  const accLinkIsMaps = !!accLink && isGoogleMapsUrl(accLink)
   const companionStaysOvernight = companion ? companion.dayIndex < companion.totalDays : false
   const { trackPoints, reload: reloadGPX } = useStageGPX(stageNum)
 
@@ -103,8 +106,11 @@ export default function DayCard() {
   const finishLat = finishPoint?.lat ?? stage?.lat
   const finishLon = finishPoint?.lon ?? stage?.lon
 
-  const startWeather = useLocationWeather(`${stageNum}-start`, startPoint?.lat, startPoint?.lon)
-  const finishWeather = useLocationWeather(`${stageNum}-finish`, finishLat, finishLon)
+  // Weather is for the stage's planned date (cache key includes the date so a
+  // changed CSV date invalidates it).
+  const stageDate = stage?.date
+  const startWeather = useLocationWeather(`${stageNum}-start-${stageDate ?? ''}`, startPoint?.lat, startPoint?.lon, stageDate)
+  const finishWeather = useLocationWeather(`${stageNum}-finish-${stageDate ?? ''}`, finishLat, finishLon, stageDate)
 
   const [mapCollapsed, setMapCollapsed] = useState(false)
   const [startWeatherCollapsed, setStartWeatherCollapsed] = useState(false)
@@ -118,17 +124,9 @@ export default function DayCard() {
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => { scrollRef.current?.scrollTo(0, 0) }, [stageNum])
 
-  // Retry contact lookup when viewing a stage whose accommodation link never
-  // resolved (e.g. the proxy was down at CSV-upload time). One attempt per
-  // stage per session — the ref guard stops it from looping on a cached error.
-  const contactTried = useRef<Set<number>>(new Set())
-  useEffect(() => {
-    if (!stage || !stage.accommodation_url || !isUrl(stage.accommodation_url)) return
-    if (contact && !contact.fetchError) return
-    if (contactTried.current.has(stage.stage)) return
-    contactTried.current.add(stage.stage)
-    fetchAccommodationContact(stage.accommodation_url, stage.stage).catch(() => {})
-  }, [stage, contact])
+  // NOTE: accommodation place info is fetched once at CSV-upload time and cached
+  // forever (only re-fetched when a new CSV is uploaded). We intentionally do NOT
+  // retry on view — the data doesn't change on hiking timescales.
 
   if (loading) {
     return (
@@ -202,7 +200,7 @@ export default function DayCard() {
         </div>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 pb-28">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 pb-32">
 
         {/* Route stats */}
         <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4">
@@ -302,49 +300,53 @@ export default function DayCard() {
             <div className="mt-2 flex items-start gap-2">
               <span className="text-base shrink-0">🏠</span>
               <div className="flex-1 min-w-0">
-                {stage.accommodation_url && isUrl(stage.accommodation_url) ? (
-                  <a
-                    href={stage.accommodation_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm font-medium text-green-700 underline underline-offset-2 break-words"
-                  >
-                    {stage.accommodation_name}
-                  </a>
-                ) : (
-                  <p className="text-sm font-medium text-neutral-800 break-words">{stage.accommodation_name}</p>
-                )}
+                {/* Name (resolved place name preferred) + optional OSM star class */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium text-neutral-800 break-words">
+                    {contact?.placeName || stage.accommodation_name}
+                  </p>
+                  {contact?.stars && (
+                    <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                      {'★'.repeat(Math.min(5, parseInt(contact.stars, 10) || 0))} {contact.stars}-star
+                    </span>
+                  )}
+                </div>
 
-                {/* Contact info fetched from URL */}
-                {contact && !contact.fetchError && (
+                {/* Contact info (best-effort from OpenStreetMap) */}
+                {(contact?.phone || contact?.website || contact?.address) && (
                   <div className="mt-2 space-y-1">
-                    {contact.phone && (
-                      <a
-                        href={`tel:${contact.phone}`}
-                        className="flex items-center gap-1.5 text-xs text-neutral-700 hover:text-green-700"
-                      >
+                    {contact?.phone && (
+                      <a href={`tel:${contact.phone.replace(/\s+/g, '')}`} className="flex items-center gap-1.5 text-xs text-neutral-700 hover:text-green-700">
                         <span>📞</span>
                         <span>{contact.phone}</span>
                       </a>
                     )}
-                    {contact.website && (
-                      <a
-                        href={contact.website}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 text-xs text-green-700 underline underline-offset-1 break-all"
-                      >
+                    {contact?.website && (
+                      <a href={contact.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs text-green-700 underline underline-offset-1 break-all">
                         <span>🌐</span>
                         <span>{contact.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
                       </a>
                     )}
-                    {contact.address && (
+                    {contact?.address && (
                       <p className="flex items-start gap-1.5 text-xs text-neutral-500">
                         <span>📍</span>
                         <span>{contact.address}</span>
                       </p>
                     )}
                   </div>
+                )}
+
+                {/* Open externally */}
+                {accLink && (
+                  <a
+                    href={accLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-3 py-1.5 active:bg-green-100"
+                  >
+                    <span>{accLinkIsMaps ? '🗺️' : '🌐'}</span>
+                    <span>{accLinkIsMaps ? 'Open in Google Maps' : 'Open website'}</span>
+                  </a>
                 )}
               </div>
             </div>
@@ -381,11 +383,13 @@ export default function DayCard() {
               <div className="flex-1 min-w-0">
                 <WeatherWidget
                   label="Start"
+                  forDate={stage.date}
                   day={startWeather.day}
                   loading={startWeather.loading}
                   error={startWeather.error}
                   fetchedAt={startWeather.fetchedAt}
                   stale={startWeather.stale}
+                  tooFar={startWeather.tooFar}
                   collapsed={startWeatherCollapsed}
                   onToggle={() => setStartWeatherCollapsed(c => !c)}
                 />
@@ -395,11 +399,13 @@ export default function DayCard() {
               <div className="flex-1 min-w-0">
                 <WeatherWidget
                   label="Finish"
+                  forDate={stage.date}
                   day={finishWeather.day}
                   loading={finishWeather.loading}
                   error={finishWeather.error}
                   fetchedAt={finishWeather.fetchedAt}
                   stale={finishWeather.stale}
+                  tooFar={finishWeather.tooFar}
                   collapsed={finishWeatherCollapsed}
                   onToggle={() => setFinishWeatherCollapsed(c => !c)}
                 />
@@ -410,7 +416,7 @@ export default function DayCard() {
       </div>
 
       {/* Prev / Next */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-neutral-200 px-4 py-4 flex gap-3">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-neutral-200 px-4 py-4 flex gap-3 safe-area-bottom">
         <button
           onClick={goPrev}
           disabled={!prev}

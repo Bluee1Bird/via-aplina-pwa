@@ -82,20 +82,27 @@ async function fetchOverpassPOIs(
   }
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
+    // AbortController + setTimeout instead of AbortSignal.timeout() — the latter
+    // is iOS Safari 16+ only and would throw on older iPhones.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 25000)
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(queries[type])}`,
-        signal: AbortSignal.timeout(25000),
+        signal: controller.signal,
       })
-      if (!res.ok) continue
-      const data = await res.json() as { elements?: Array<{ lat?: number; lon?: number; tags?: Record<string, string> }> }
-      return (data.elements ?? [])
-        .filter(el => el.lat !== undefined && el.lon !== undefined)
-        .map(el => ({ lat: el.lat!, lon: el.lon!, name: el.tags?.name }))
+      if (res.ok) {
+        const data = await res.json() as { elements?: Array<{ lat?: number; lon?: number; tags?: Record<string, string> }> }
+        return (data.elements ?? [])
+          .filter(el => el.lat !== undefined && el.lon !== undefined)
+          .map(el => ({ lat: el.lat!, lon: el.lon!, name: el.tags?.name }))
+      }
     } catch {
       // try next mirror
+    } finally {
+      clearTimeout(timer)
     }
   }
   return null
