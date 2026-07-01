@@ -21,7 +21,7 @@ User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedD
 
 **Import formats — CSV/TXT *and* Excel.** `csv.ts` has one shared back-end `storeStageRows(rows, fields)` (validate required columns → map `Stage[]` → replace store → kick off accommodation resolution); the two front-ends only differ in how they produce rows: `parseAndStoreCSV` (papaparse) and `parseAndStoreSpreadsheet` (SheetJS/`xlsx`, first worksheet). Settings routes by extension (`.xlsx?` → spreadsheet, else CSV). **SheetJS is `import()`-lazy-loaded** — it's a 141 KB-gzip chunk that must not touch the initial bundle or the CSV path (it loads only when an Excel file is actually picked; still precached by the SW so Excel import works offline). Excel date cells are read with `cellDates:true`/`raw:true` and collapsed to `yyyy-mm-dd` via `isoDate()` using **UTC components** (a date-only cell is UTC-midnight; local formatting would shift the day). `xlsx` is the npm registry build `0.18.5`, which carries a high-severity advisory (prototype pollution / ReDoS) that only triggers on a *maliciously crafted* spreadsheet — acceptable here since the user imports their own export. The patched build ships **only via SheetJS's CDN** (not npm); to upgrade: `npm i https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`.
 
-### IndexedDB schema (`src/lib/db.ts`, `idb` library) — **DB version 5**
+### IndexedDB schema (`src/lib/db.ts`, `idb` library) — **DB version 6**
 | Store | Key | Value |
 |---|---|---|
 | `stages` | `stage` (int) | `Stage` CSV row |
@@ -29,8 +29,12 @@ User uploads CSV → `src/lib/csv.ts` (papaparse) validates + writes to IndexedD
 | `weather` | `key` (string `"N-start-<date>"` / `"N-finish-<date>"`) | `WeatherCache` (15-min TTL) |
 | `gpx` | `stageNumber` (int) | `StageGpxData` (`trackPoints`) — **per-stage**, not a singleton |
 | `accommodationContacts` | `stageId` (int) | `AccommodationContactCache` |
+| `stageOverrides` | `stage` (int) | `StageOverride` — per-stage user data (actual duration) **that survives CSV re-uploads** |
+| `weatherLinks` | `place` (string town name) | `WeatherLinkCache` — resolved MeteoSwiss forecast URL per start/finish town (rebuilt per upload) |
 
-Upgrade history lives in `getDB()`'s `upgrade()`: v2 added `gpx`, v3 cleared it, v4 re-keyed `weather` from numeric `stageId` to string `key`, v5 added `accommodationContacts`. Bump the version + add an `if (oldVersion < N)` block for any new store/key change.
+Upgrade history lives in `getDB()`'s `upgrade()`: v2 added `gpx`, v3 cleared it, v4 re-keyed `weather` from numeric `stageId` to string `key`, v5 added `accommodationContacts`, v6 added `stageOverrides`, v7 added `weatherLinks`. Bump the version + add an `if (oldVersion < N)` block for any new store/key change.
+
+**`stageOverrides` — deliberately CSV-independent.** Keyed by stage *number* (the nth entry), NOT by CSV content. `storeStageRows` only `.clear()`s `stages` + `accommodationContacts`, so overrides persist across re-uploads — a new CSV (new dates/routes/accommodation) keeps the user's logged actuals. Read/written via `useStageOverride(stageNum)` (`{ override, setActualDuration }`). Currently holds `actualDuration_h` (the DayCard Duration metric is tappable to log the real time vs. the CSV estimate); extend the interface for future per-stage user data.
 
 ### Routing
 `HashRouter`. Three routes: `/`, `/stage/:stageId`, `/settings`.
@@ -65,6 +69,7 @@ Open-Meteo `/v1/forecast` (no API key). Coordinates come from the stage's GPX st
 - Forecast is for the **stage's planned date** (`start_date=end_date=stage.date`), **not** today.
 - Open-Meteo's free forecast horizon is ~16 days. If the stage date is further out, `fetchLocationWeather` returns `{ tooFar: true }` without hitting the API and the widget shows a "check back within ~16 days" note.
 - Cache key includes the date (`N-start-<date>`) so editing the CSV date invalidates the cached forecast.
+- **Clickable source link → MeteoSwiss local forecast for the CSV town** (`src/lib/meteoswiss.ts`). The widget's "Source: MeteoSwiss" link opens `meteoswiss.admin.ch/local-forecasts/<slug>/<plz>.html` for the stage's **CSV `start`/`finish` town** (not the GPX coords — a named town gives a cleaner local forecast). MeteoSwiss has no name/coord deep-link (postcode-keyed pages, wrong slug 404s), so we resolve at **CSV-upload time** via Switzerland's official **geo.admin.ch** API (CORS-enabled, no proxy): `SearchServer` name→coords, then `MapServer/identify` on `ch.swisstopo-vd.ortschaftenverzeichnis_plz` → postcode + official locality name → `slugifyLocality()` builds the slug (German umlauts ä→ae/ö→oe/ü→ue matching MeteoSwiss's own slugs; other accents stripped; apostrophes/dots/spaces→hyphens). Resolved URLs are deduped by town and cached in the `weatherLinks` store (rebuilt each upload, cleared alongside `stages`); `useWeatherLinks()` reads them, refreshing on the `weatherLinksUpdated` event. Unresolvable towns (huts, or the rare anglicised slug like Zürich→"zurich" not "zuerich") cache `url:null` → widget falls back to `METEOSWISS_HOME`. The near-term/long-range split still governs the **data** (`modelParam`), just not the link. Verified end-to-end: Zermatt/Grindelwald/Kandersteg/Adelboden/Les Diablerets all resolve to live 200 pages.
 - **Model selection (`modelParam`):** within ≤5 days of the hike it pins **`models=meteoswiss_icon_ch2`** (MeteoSwiss ~2 km, terrain-tuned for the Alps); beyond that it uses `best_match` (which already prefers MeteoSwiss ICON-CH near-term in CH but extends to 16 days with global models). Pinning the Swiss model further out returns `null` — it only forecasts ~5 days (`icon_ch1` ~1 km is even shorter, ~1.5 days). This serves MeteoSwiss's *raw model* data; their official post-processed forecasts/warnings/nowcasting are not available via Open-Meteo.
 
 ### CSV schema (current real data)
@@ -99,6 +104,7 @@ The two install targets use different engines (WebKit vs Blink). Verified gotcha
 - **Safe areas** — fixed bottom bars use the `.safe-area-bottom` utility (`env(safe-area-inset-bottom)`); headers use `pt-12` so content clears the iOS status bar with `apple-mobile-web-app-status-bar-style: black-translucent` + `viewport-fit=cover`.
 - **Drag must use Pointer Events + `setPointerCapture`** (works on touch; see below). SMIL (`<animateMotion>`) and CSS transforms on SVG work in both engines.
 - IndexedDB, service workers, `flatMap`, optional chaining all fine on both. iOS *can* evict IndexedDB/PWA cache under storage pressure or long disuse — data is per-device, no sync.
+- **Persistent storage against eviction** (`src/lib/storage.ts`): app/version updates never touch IndexedDB (Workbox only manages the app-shell CACHE, not IndexedDB), so *eviction* is the only real data-loss vector. `requestPersistentStorage()` (`navigator.storage.persist()`) is fired once on launch in `App.tsx` and is idempotent. Settings shows a live **Offline Storage** card (persisted? + usage via `estimate()`) with a manual "Keep data on this device" button (`usePersistentStorage` hook). Cross-platform: Android Chrome grants it via engagement/installation; **iOS Safari (16.4+) only grants it for installed Add-to-Home-Screen web apps** — hence the card's iOS hint. All calls guard for missing `navigator.storage` APIs so older engines no-op instead of throwing.
 - Testing: a headless-Chrome harness (Playwright `playwright-core` + the system Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`) drives the real app (upload fixtures → exercise map/overlays/nav/celebration). WebKit testing needs `npx playwright install webkit` (was blocked by a CDN-DNS restriction in one environment — fall back to static audit there).
 
 ## Map resize — TWO bugs, both fixed (don't regress)
@@ -118,6 +124,7 @@ Real GPX tracks have thousands of points; naive rendering janks badly on resize.
 
 ## POI overlays (ATM / Shops / Transit)
 
+- Layer toggles (Topo + POI chips) live in a **collapsible floating menu** overlaid on the top-right of the map (a "⚙️ Layers" button), collapsed by default so the map isn't crowded. It's a DOM sibling positioned over `MapContainer` (not a Leaflet control), so taps there don't reach Leaflet / start a map drag; top-right avoids Leaflet's top-left zoom control.
 - Overpass via 3 mirrors (`overpass-api.de`, `kumi.systems`, `maps.mail.ru`) with fallback; `AbortController` timeout.
 - Per-chip **loading spinner + result count + colour swatch matching the marker colour**. `pois[type]` is `null` = not loaded (re-toggle retries on failure), `[]` = loaded/none-found (shows "none found").
 - Swipe-to-navigate is disabled inside the map via a `[data-no-swipe]` region (so panning the map doesn't flip stages).

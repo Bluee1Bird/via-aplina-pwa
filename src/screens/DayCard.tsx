@@ -7,8 +7,11 @@ import { useSwipe } from '../hooks/useSwipe'
 import { useLocationWeather } from '../hooks/useWeather'
 import { useStageGPX } from '../hooks/useGPX'
 import { useAccommodationContacts } from '../hooks/useAccommodationContacts'
+import { useStageOverride } from '../hooks/useStageOverride'
+import { useWeatherLinks } from '../hooks/useWeatherLinks'
 import { parseAndStoreStageGPX } from '../lib/gpx'
 import { isUrl, isGoogleMapsUrl } from '../lib/accommodations'
+import { METEOSWISS_HOME } from '../lib/meteoswiss'
 import WeatherWidget from '../components/WeatherWidget'
 
 const StageMap = lazy(() => import('../components/StageMap'))
@@ -34,6 +37,8 @@ export default function DayCard() {
   const { onTouchStart, onTouchEnd } = useSwipe(goNext, goPrev)
 
   const { completedStages, toggleStage } = useProgress(stages)
+  const { override, setActualDuration } = useStageOverride(stageNum)
+  const weatherLinks = useWeatherLinks()
   const companion = useCompanion(stage, stages)
   const contacts = useAccommodationContacts()
   const contact = stage ? contacts.get(stage.stage) : undefined
@@ -118,6 +123,12 @@ export default function DayCard() {
 
   const hasStartWeather = !!(startPoint?.lat && startPoint?.lon)
   const hasFinishWeather = !!(finishLat && finishLon)
+
+  // Source link → the MeteoSwiss local-forecast page for the stage's CSV
+  // start/finish town (resolved at upload). Falls back to MeteoSwiss home while
+  // unresolved or if the town couldn't be matched.
+  const startSource = { name: 'MeteoSwiss', url: (stage ? weatherLinks.get(stage.start) : null) ?? METEOSWISS_HOME }
+  const finishSource = { name: 'MeteoSwiss', url: (stage ? weatherLinks.get(stage.finish) : null) ?? METEOSWISS_HOME }
 
   // Reset scroll to the top when moving between stages (the screen doesn't
   // remount on param change, so it would otherwise stay scrolled down).
@@ -211,7 +222,11 @@ export default function DayCard() {
           <div className="grid grid-cols-3 gap-3">
             <Metric icon="📍" label="Distance" value={`${stage.length_km} km`} />
             <Metric icon="⛰️" label="Elevation" value={`+${stage.elevation_gain_m} m`} />
-            <Metric icon="⏱️" label="Duration" value={`${stage.duration_h} h`} />
+            <DurationMetric
+              estimate={stage.duration_h}
+              actual={override?.actualDuration_h}
+              onSave={setActualDuration}
+            />
           </div>
 
           {waypointsDiffer(stage) && (
@@ -390,6 +405,7 @@ export default function DayCard() {
                   fetchedAt={startWeather.fetchedAt}
                   stale={startWeather.stale}
                   tooFar={startWeather.tooFar}
+                  source={startSource}
                   collapsed={startWeatherCollapsed}
                   onToggle={() => setStartWeatherCollapsed(c => !c)}
                 />
@@ -406,6 +422,7 @@ export default function DayCard() {
                   fetchedAt={finishWeather.fetchedAt}
                   stale={finishWeather.stale}
                   tooFar={finishWeather.tooFar}
+                  source={finishSource}
                   collapsed={finishWeatherCollapsed}
                   onToggle={() => setFinishWeatherCollapsed(c => !c)}
                 />
@@ -443,6 +460,84 @@ function Metric({ icon, label, value }: { icon: string; label: string; value: st
       <p className="text-xs text-neutral-400 mt-1">{label}</p>
       <p className="text-sm font-semibold text-neutral-800 mt-0.5">{value}</p>
     </div>
+  )
+}
+
+// Trim trailing zeros so 2.50 → "2.5", 3.00 → "3".
+function fmtHours(n: number): string {
+  return Number(n.toFixed(2)).toString()
+}
+
+// Duration is a CSV *estimate*; tapping it logs the ACTUAL time hiked, stored
+// per stage number (survives CSV re-uploads) and shown against the estimate.
+function DurationMetric({
+  estimate, actual, onSave,
+}: {
+  estimate: number
+  actual?: number
+  onSave: (hours: number | undefined) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+
+  const start = () => {
+    setVal(actual != null ? fmtHours(actual) : '')
+    setEditing(true)
+  }
+  const commit = () => {
+    const t = val.trim().replace(',', '.')
+    if (t === '') onSave(undefined)
+    else {
+      const n = Number(t)
+      if (!Number.isNaN(n) && n >= 0) onSave(n)
+    }
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-col items-center text-center">
+        <span className="text-xl">⏱️</span>
+        <p className="text-xs text-neutral-400 mt-1">Actual (h)</p>
+        <input
+          type="number"
+          inputMode="decimal"
+          step="0.25"
+          min="0"
+          autoFocus
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === 'Enter') commit()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          placeholder={fmtHours(estimate)}
+          className="mt-0.5 w-16 text-center text-sm font-semibold text-neutral-800 border-b border-green-400 focus:outline-none"
+        />
+      </div>
+    )
+  }
+
+  const diff = actual != null ? actual - estimate : null
+
+  return (
+    <button onClick={start} className="flex flex-col items-center text-center">
+      <span className="text-xl">⏱️</span>
+      <p className="text-xs text-neutral-400 mt-1">Duration</p>
+      <p className="text-sm font-semibold text-neutral-800 mt-0.5">
+        {actual != null ? `${fmtHours(actual)} h` : `${fmtHours(estimate)} h`}
+      </p>
+      {diff != null ? (
+        <p className={`text-[10px] mt-0.5 leading-tight ${
+          diff > 0 ? 'text-red-500' : diff < 0 ? 'text-green-600' : 'text-neutral-400'
+        }`}>
+          est {fmtHours(estimate)}h · {diff === 0 ? 'on time' : `${diff > 0 ? '+' : ''}${fmtHours(diff)}h`}
+        </p>
+      ) : (
+        <p className="text-[10px] mt-0.5 leading-tight text-neutral-300">est · tap to log</p>
+      )}
+    </button>
   )
 }
 

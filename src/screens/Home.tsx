@@ -29,7 +29,7 @@ export default function Home() {
 
   if (stages.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-6 text-center">
+      <div className="relative flex flex-col items-center justify-center min-h-screen gap-4 px-6 text-center">
         <span className="text-5xl">🏔️</span>
         <h1 className="text-xl font-semibold text-neutral-800">No data loaded</h1>
         <p className="text-neutral-500 text-sm">Upload your stage CSV to get started.</p>
@@ -39,6 +39,14 @@ export default function Home() {
         >
           Go to Settings
         </Link>
+        <a
+          href="https://github.com/Bluee1Bird"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute bottom-6 text-xs text-neutral-400 hover:text-green-700"
+        >
+          © {new Date().getFullYear()} Bluee1Bird
+        </a>
       </div>
     )
   }
@@ -160,6 +168,18 @@ export default function Home() {
             )
           })}
         </ul>
+
+        {/* Copyright */}
+        <footer className="px-4 py-6 text-center">
+          <a
+            href="https://github.com/Bluee1Bird"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-neutral-400 hover:text-green-700"
+          >
+            © {new Date().getFullYear()} Bluee1Bird
+          </a>
+        </footer>
       </div>
 
       {/* Bottom action */}

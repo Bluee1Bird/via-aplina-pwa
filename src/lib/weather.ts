@@ -29,6 +29,11 @@ function modelParam(isoDate: string): string {
   return d >= 0 && d <= 5 ? '&models=meteoswiss_icon_ch2' : ''
 }
 
+export interface WeatherSource {
+  name: string
+  url: string
+}
+
 export async function fetchLocationWeather(
   cacheKey: string,
   lat: number,

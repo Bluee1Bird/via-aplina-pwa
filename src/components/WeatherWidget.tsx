@@ -1,5 +1,6 @@
 import type { WeatherDay } from '../lib/types'
 import { weatherIcon, weatherLabel } from '../lib/weather'
+import type { WeatherSource } from '../lib/weather'
 
 interface Props {
   label: string
@@ -10,6 +11,7 @@ interface Props {
   fetchedAt: number | null
   stale: boolean
   tooFar?: boolean
+  source?: WeatherSource // where this day's forecast comes from (clickable)
   collapsed: boolean
   onToggle: () => void
 }
@@ -19,7 +21,7 @@ function shortDate(iso?: string): string {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-export default function WeatherWidget({ label, forDate, day, loading, error, fetchedAt, stale, tooFar, collapsed, onToggle }: Props) {
+export default function WeatherWidget({ label, forDate, day, loading, error, fetchedAt, stale, tooFar, source, collapsed, onToggle }: Props) {
   const minAgo = fetchedAt ? Math.round((Date.now() - fetchedAt) / 60000) : null
 
   return (
@@ -73,6 +75,19 @@ export default function WeatherWidget({ label, forDate, day, loading, error, fet
                 <p className="text-xs text-amber-600 mt-2 leading-snug">
                   ⚠️ {minAgo === 0 ? 'just now' : `${minAgo} min ago`}
                 </p>
+              )}
+              {source && (
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-neutral-400 hover:text-green-700 underline underline-offset-2 decoration-neutral-300"
+                >
+                  Source: {source.name}
+                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </a>
               )}
             </div>
           )}

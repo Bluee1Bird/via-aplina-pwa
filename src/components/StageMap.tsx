@@ -22,8 +22,12 @@ const POI_TYPES: PoiType[] = ['atm', 'shops', 'transport']
 
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-const TOPO_URL = 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'
-const TOPO_ATTR = 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> | Style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
+// Swiss national topographic map (swisstopo "Landeskarte", pixelkarte-farbe) via
+// the official geo.admin.ch WMTS in Web Mercator (3857) — terrain-accurate for
+// the Alps. Only covers Switzerland; outside CH the tiles are blank (fine, the
+// Via Alpina route is Swiss).
+const TOPO_URL = 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg'
+const TOPO_ATTR = '&copy; <a href="https://www.swisstopo.admin.ch/">swisstopo</a>'
 
 // Multiple Overpass mirrors — the main endpoint rate-limits aggressively, so we
 // fall through to backups before giving up.
@@ -167,6 +171,7 @@ function decimate<T>(points: T[], max: number): T[] {
 }
 
 export default function StageMap({ trackPoints, labelStart, labelFinish, height = 240 }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false)
   const [overlays, setOverlays] = useState({ atm: false, shops: false, transport: false, topo: false })
   // null = not yet loaded (or last attempt failed → retry on re-toggle); [] = loaded, none found.
   const [pois, setPois] = useState<Record<PoiType, POI[] | null>>({ atm: null, shops: null, transport: null })
@@ -235,36 +240,54 @@ export default function StageMap({ trackPoints, labelStart, labelFinish, height 
 
   return (
     <div>
-      {/* Overlay toggle controls */}
-      <div className="flex items-center gap-1.5 px-3 py-2 flex-wrap">
-        <span className="text-xs text-neutral-400 mr-0.5">Layers:</span>
-        <OverlayChip active={overlays.topo} onClick={() => toggle('topo')}>⛰️ Topo</OverlayChip>
-        {POI_TYPES.map(t => (
-          <OverlayChip
-            key={t}
-            active={overlays[t]}
-            loading={poiLoading[t]}
-            count={pois[t]?.length ?? null}
-            dotColor={POI_META[t].fill}
-            onClick={() => toggle(t)}
-          >
-            {POI_META[t].emoji} {POI_META[t].label}
-          </OverlayChip>
-        ))}
-      </div>
-
-      {emptyOverlay && (
-        <p className="px-3 pb-1.5 -mt-0.5 text-[11px] text-neutral-400">
-          {pois[emptyOverlay] === null
-            ? `Couldn't load ${POI_META[emptyOverlay].label.toLowerCase()} — tap again to retry.`
-            : `No ${POI_META[emptyOverlay].label.toLowerCase()} found near this stage.`}
-        </p>
-      )}
-
       {/* react-leaflet's MapContainer reads `style` only once at mount, so live
           resizing must happen on a wrapper we control; the map fills it at 100%
-          and MapResizer keeps Leaflet's internal pixel size in sync. */}
-      <div style={{ height: `${height}px`, width: '100%' }}>
+          and MapResizer keeps Leaflet's internal pixel size in sync.
+          `relative` anchors the floating layers menu that overlays the map. */}
+      <div style={{ height: `${height}px`, width: '100%' }} className="relative">
+      {/* Floating layers menu — collapsed by default so options don't eat space.
+          It's a DOM sibling on top of the map, so taps here never reach Leaflet
+          (no map-drag), and top-right stays clear of Leaflet's top-left zoom. */}
+      <div className="absolute top-2 right-2 z-[1000] flex flex-col items-end gap-1.5">
+        <button
+          onClick={() => setMenuOpen(o => !o)}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium shadow-md border transition-colors ${
+            menuOpen
+              ? 'bg-green-700 text-white border-green-700'
+              : 'bg-white/95 text-neutral-600 border-neutral-200'
+          }`}
+          aria-expanded={menuOpen}
+        >
+          <span>⚙️</span>
+          <span>Layers</span>
+        </button>
+
+        {menuOpen && (
+          <div className="bg-white/95 backdrop-blur rounded-xl shadow-lg border border-neutral-200 p-2 flex flex-col items-start gap-1.5 max-w-[62vw]">
+            <OverlayChip active={overlays.topo} onClick={() => toggle('topo')}>⛰️ swisstopo</OverlayChip>
+            {POI_TYPES.map(t => (
+              <OverlayChip
+                key={t}
+                active={overlays[t]}
+                loading={poiLoading[t]}
+                count={pois[t]?.length ?? null}
+                dotColor={POI_META[t].fill}
+                onClick={() => toggle(t)}
+              >
+                {POI_META[t].emoji} {POI_META[t].label}
+              </OverlayChip>
+            ))}
+            {emptyOverlay && (
+              <p className="text-[11px] text-neutral-400 leading-snug pt-0.5">
+                {pois[emptyOverlay] === null
+                  ? `Couldn't load ${POI_META[emptyOverlay].label.toLowerCase()} — tap again to retry.`
+                  : `No ${POI_META[emptyOverlay].label.toLowerCase()} found near this stage.`}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       <MapContainer
         center={[center.lat, center.lon]}
         zoom={13}
@@ -277,7 +300,7 @@ export default function StageMap({ trackPoints, labelStart, labelFinish, height 
         <TileLayer
           attribution={overlays.topo ? TOPO_ATTR : OSM_ATTR}
           url={overlays.topo ? TOPO_URL : OSM_URL}
-          maxZoom={overlays.topo ? 17 : 19}
+          maxZoom={overlays.topo ? 18 : 19}
         />
 
         <Polyline positions={positions} color="#15803d" weight={4} opacity={0.9} smoothFactor={2} />

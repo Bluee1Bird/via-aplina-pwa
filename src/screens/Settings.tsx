@@ -4,13 +4,56 @@ import { parseAndStoreCSV, parseAndStoreSpreadsheet } from '../lib/csv'
 import { parseAndStoreStageGPX } from '../lib/gpx'
 import { useStages } from '../hooks/useStages'
 import { useGPXStatus } from '../hooks/useGPX'
+import { usePersistentStorage } from '../hooks/usePersistentStorage'
+import { formatBytes } from '../lib/storage'
+import { downloadBackup, importBackup, readBackupFile } from '../lib/backup'
 
 export default function Settings() {
   const { stages, reload: reloadStages } = useStages()
   const { loadedStages, reload: reloadGPX } = useGPXStatus()
+  const { status: storage, request: requestStorage, requesting: storageRequesting } = usePersistentStorage()
 
   const csvInputRef = useRef<HTMLInputElement>(null)
   const gpxInputRef = useRef<HTMLInputElement>(null)
+  const backupInputRef = useRef<HTMLInputElement>(null)
+
+  const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [backupBusy, setBackupBusy] = useState(false)
+
+  const handleExport = async () => {
+    setBackupStatus(null)
+    setBackupBusy(true)
+    try {
+      await downloadBackup()
+      setBackupStatus({ type: 'success', message: 'Backup file saved. Keep it somewhere safe (e.g. Files / Drive).' })
+    } catch (err) {
+      setBackupStatus({ type: 'error', message: (err as Error).message })
+    } finally {
+      setBackupBusy(false)
+    }
+  }
+
+  const handleImportChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!window.confirm('Restore this backup? It replaces ALL current data on this device.')) {
+      if (backupInputRef.current) backupInputRef.current.value = ''
+      return
+    }
+    setBackupStatus(null)
+    setBackupBusy(true)
+    try {
+      const json = await readBackupFile(file)
+      const { stages: n, gpx: g } = await importBackup(json)
+      await Promise.all([reloadStages(), reloadGPX()])
+      setBackupStatus({ type: 'success', message: `Restored ${n} stage${n !== 1 ? 's' : ''}${g ? ` and ${g} GPX track${g !== 1 ? 's' : ''}` : ''}.` })
+    } catch (err) {
+      setBackupStatus({ type: 'error', message: (err as Error).message })
+    } finally {
+      setBackupBusy(false)
+      if (backupInputRef.current) backupInputRef.current.value = ''
+    }
+  }
 
   const [csvStatus, setCsvStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [gpxStatus, setGpxStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -122,7 +165,114 @@ export default function Settings() {
           status={gpxStatus}
         />
         <input ref={gpxInputRef} type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" multiple className="hidden" onChange={handleGPXChange} />
+
+        {/* Storage durability */}
+        <StorageCard
+          storage={storage}
+          requesting={storageRequesting}
+          onRequest={requestStorage}
+        />
+
+        {/* Backup & restore — survives uninstall / device moves */}
+        <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-neutral-800">Backup &amp; Restore</h2>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Save everything — stages, routes, progress and your logged times — to one file.
+            </p>
+          </div>
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            Persistent storage stops the browser auto-clearing your data, but it can't survive
+            deleting the app. Export a backup before reinstalling, or to copy your data between your
+            iPhone and Android.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={handleExport}
+              disabled={backupBusy}
+              className="flex-1 py-2.5 rounded-xl border border-green-700 text-green-700 text-sm font-medium disabled:opacity-50 active:bg-green-50 transition-colors"
+            >
+              {backupBusy ? '…' : 'Export backup'}
+            </button>
+            <button
+              onClick={() => backupInputRef.current?.click()}
+              disabled={backupBusy}
+              className="flex-1 py-2.5 rounded-xl border border-neutral-300 text-neutral-600 text-sm font-medium disabled:opacity-50 active:bg-neutral-50 transition-colors"
+            >
+              Restore
+            </button>
+          </div>
+          {backupStatus && (
+            <div className={`rounded-xl px-3 py-2.5 text-xs ${
+              backupStatus.type === 'success'
+                ? 'bg-green-50 text-green-800 border border-green-200'
+                : 'bg-red-50 text-red-800 border border-red-200'
+            }`}>
+              {backupStatus.message}
+            </div>
+          )}
+        </div>
+        <input ref={backupInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportChange} />
       </div>
+    </div>
+  )
+}
+
+function StorageCard({
+  storage,
+  requesting,
+  onRequest,
+}: {
+  storage: import('../lib/storage').StorageStatus | null
+  requesting: boolean
+  onRequest: () => void
+}) {
+  const usageLine =
+    storage?.usageBytes != null
+      ? `Using ${formatBytes(storage.usageBytes)}${storage.quotaBytes ? ` of ${formatBytes(storage.quotaBytes)} available` : ''}`
+      : null
+
+  return (
+    <div className="bg-white rounded-2xl border border-neutral-200 px-4 py-4 space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-neutral-800">Offline Storage</h2>
+        <p className="text-xs text-neutral-500 mt-0.5">
+          Your uploaded stages, routes and progress live on this device and stay through app updates.
+        </p>
+      </div>
+
+      {storage == null ? (
+        <p className="text-xs text-neutral-400">Checking…</p>
+      ) : !storage.supported ? (
+        <p className="text-xs text-neutral-500 leading-relaxed">
+          This browser can't guarantee persistent storage. Your data is still saved, but the
+          browser may clear it if the device runs low on space. On iPhone, add this app to your
+          Home Screen to make storage durable.
+        </p>
+      ) : storage.persisted ? (
+        <div className="rounded-xl px-3 py-2.5 text-xs bg-green-50 text-green-800 border border-green-200">
+          <p className="font-medium">✓ Protected — your data won't be auto-cleared on this device.</p>
+          {usageLine && <p className="mt-1 text-green-700/80">{usageLine}</p>}
+        </div>
+      ) : (
+        <>
+          <div className="rounded-xl px-3 py-2.5 text-xs bg-amber-50 text-amber-800 border border-amber-200 leading-relaxed">
+            <p className="font-medium">Not yet protected from automatic cleanup.</p>
+            <p className="mt-1 text-amber-700/90">
+              Tap below to keep your data. On iPhone this is only granted once the app is added to
+              the Home Screen (Share → Add to Home Screen), then opened from there.
+            </p>
+            {usageLine && <p className="mt-1 text-amber-700/70">{usageLine}</p>}
+          </div>
+          <button
+            onClick={onRequest}
+            disabled={requesting}
+            className="w-full py-2.5 rounded-xl border border-green-700 text-green-700 text-sm font-medium disabled:opacity-50 active:bg-green-50 transition-colors"
+          >
+            {requesting ? 'Requesting…' : 'Keep data on this device'}
+          </button>
+        </>
+      )}
     </div>
   )
 }

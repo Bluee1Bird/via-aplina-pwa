@@ -34,6 +34,14 @@ export interface Progress {
   completedStages: number[]
 }
 
+// Per-stage user data that must survive CSV re-uploads. Keyed by stage NUMBER
+// (the nth entry), deliberately independent of the CSV so a fresh CSV (new
+// dates/routes/accommodation) keeps these values intact.
+export interface StageOverride {
+  stage: number
+  actualDuration_h?: number
+}
+
 export interface GpxWaypoint {
   name: string
   lat: number
@@ -73,4 +81,14 @@ export interface AccommodationContact {
 export interface AccommodationContactCache {
   stageId: number
   contact: AccommodationContact
+}
+
+// Resolved MeteoSwiss local-forecast URL for a start/finish place name (keyed by
+// the raw CSV place string so start/finish towns shared across stages resolve
+// once). `url` is null when the place couldn't be resolved (→ fall back to the
+// MeteoSwiss home page). Rebuilt on every CSV upload.
+export interface WeatherLinkCache {
+  place: string
+  url: string | null
+  fetchedAt: number
 }

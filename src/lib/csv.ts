@@ -2,6 +2,7 @@ import Papa from 'papaparse'
 import type { Stage } from './types'
 import { getDB } from './db'
 import { isUrl, isGoogleMapsUrl, fetchAccommodationContact, fetchAccommodationPlace } from './accommodations'
+import { resolveAndCacheWeatherLinks } from './meteoswiss'
 
 const REQUIRED_COLUMNS = [
   'stage', 'date', 'length_km', 'elevation_gain_m', 'duration_h',
@@ -39,9 +40,10 @@ export async function storeStageRows(
   }))
 
   const db = await getDB()
-  const tx = db.transaction(['stages', 'accommodationContacts'], 'readwrite')
+  const tx = db.transaction(['stages', 'accommodationContacts', 'weatherLinks'], 'readwrite')
   await tx.objectStore('stages').clear()
   await tx.objectStore('accommodationContacts').clear()
+  await tx.objectStore('weatherLinks').clear()
   await Promise.all(stages.map(s => tx.objectStore('stages').put(s)))
   await tx.done
 
@@ -56,6 +58,10 @@ export async function storeStageRows(
       fetchAccommodationContact(url, stage.stage).catch(() => {})
     }
   }
+
+  // Fire-and-forget: resolve each start/finish town to its MeteoSwiss forecast
+  // URL (deduped). Cached until the next upload (store cleared above).
+  resolveAndCacheWeatherLinks(stages.flatMap(s => [s.start, s.finish])).catch(() => {})
 
   return { count: stages.length }
 }
